@@ -35,7 +35,7 @@ version = { attr = "n8n_builder.__version__" }
 include = ["n8n_builder*"]
 
 [tool.setuptools.package-data]
-"n8n_builder" = ["static/*"]
+"n8n_builder" = ["static/*", "skills/*/SKILL.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -15,6 +15,7 @@ Conçu pour le [Hub d'agents](https://github.com/jeannicolasdavid1979/hub-d-agen
 | **Labo n8n** | pro | Tous les réglages du générateur : préparation en JavaScript, règles sur les probabilités brutes, score composite, sources RSS ou HTTP, LLM de secours sur une route. Bibliothèque de modèles |
 | **Modèles LLM** | tous | OpenRouter en tête, puis Ollama Cloud, Ollama local, TypeSafe Jev, Anthropic, OpenAI, Gemini, Mistral, DeepSeek, Groq, xAI, Together, Cerebras. Listes de modèles lues en direct (prix et contexte pour OpenRouter). Clés chiffrées, jamais renvoyées à l'interface |
 | **Instances n8n** | tous | Local, VPS ou n8n Cloud par l'API publique : envoi, remplacement, identifiants, activation |
+| **Banque de skills** | agents | Cinq SKILL.md au format du Hub : Jev, n8n, le builder et son API, les fiches du Labo Jev, l'export vers une playlist. À importer dans le Hub ou à lire par API (`/api/skills`) |
 
 Les deux labos exportent vers le Hub d'agents : **OpenAPI** (l'automate devient un outil de la playlist), **SKILL.md** (la consigne de l'agent, route par route), **kit** (une playlist complète avec épreuves tirées des cas de test) et le **workflow n8n**. Ces formats sont vérifiés avec le code d'import du Hub lui-même.
 

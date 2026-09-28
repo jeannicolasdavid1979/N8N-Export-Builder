@@ -93,7 +93,7 @@ function parseValue(v) {
 
 // Navigation ------------------------------------------------------------------------------------------
 
-const PAGES = { jev: renderJevLab, atelier: renderAtelier, modeles: renderModels, n8n: renderN8n, guide: renderGuide };
+const PAGES = { jev: renderJevLab, atelier: renderAtelier, modeles: renderModels, n8n: renderN8n, skills: renderSkills, guide: renderGuide };
 function currentPage() { const p = location.hash.replace('#', '').split('/')[0]; return PAGES[p] ? p : 'jev'; }
 async function route() {
   const page = currentPage();
@@ -1660,6 +1660,33 @@ function llmSetup(get, set, routes, onChange) {
     set({ routes: [...(cur.routes || []), { ...def(), route: r }] }); onChange(true);
   } }));
   return card;
+}
+
+// Banque de skills ------------------------------------------------------------------------------------
+
+async function renderSkills(main) {
+  const { skills } = await api('GET', '/api/skills');
+  put(main, h('div', { class: 'page-head' },
+    h('div', {}, h('h1', { text: 'Banque de skills' }),
+      h('p', { class: 'muted', text: 'Ce qu\'un agent doit savoir de Jev, de n8n et de cet outil, au format SKILL.md du Hub d\'agents.' })),
+    h('a', { class: 'btn primary', href: '/api/skills.zip', download: 'banque-skills.zip', text: 'Tout télécharger (.zip)' })),
+    tuto('skills', 'donner ce savoir à un agent', [
+      ['Un ', h('b', { text: 'skill' }), ' est une fiche d\'instructions que l\'agent lit avant d\'agir. ', info('Format SKILL.md : un en-tête (nom, description) puis les instructions. Le Hub d\'agents, Claude et d\'autres agents le lisent tel quel.')],
+      ['Dans le Hub : Catalogue, Skills, importer le SKILL.md (ou le .zip), puis « Ajouter à une playlist ».'],
+      ['Pour un agent qui pilote cet outil par API : il peut lire lui-même la banque sur /api/skills puis /api/skills/<nom>.'],
+      ['Commencez par « n8n-export-builder » : il renvoie vers les autres.'],
+    ]));
+  const view = h('pre', { class: 'json', style: 'max-height:520px' });
+  const list = h('div', { class: 'grid two' });
+  for (const sk of skills) {
+    put(list, h('div', { class: 'card stack' },
+      h('h2', { class: 'mono', text: sk.name }), h('p', { class: 'small muted', text: sk.description }),
+      h('div', { class: 'row' },
+        h('button', { class: 'small', text: 'Lire', onclick: async () => { view.textContent = await (await fetch('/api/skills/' + sk.name)).text(); view.scrollIntoView({ behavior: 'smooth' }); } }),
+        h('button', { class: 'small', text: 'Copier', onclick: async () => { await navigator.clipboard.writeText(await (await fetch('/api/skills/' + sk.name)).text()); toast('Skill copié'); } }),
+        h('a', { class: 'btn small', href: '/api/skills/' + sk.name, download: sk.name + '-SKILL.md', text: 'Télécharger' }))));
+  }
+  put(main, list, h('div', { class: 'card', style: 'margin-top:14px' }, h('h2', { text: 'Contenu' }), view));
 }
 
 // Démarrage -------------------------------------------------------------------------------------------

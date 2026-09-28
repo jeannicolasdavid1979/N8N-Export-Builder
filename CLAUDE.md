@@ -22,3 +22,7 @@ Interface, documentation et messages de commit en français. Pas de tiret cadrat
 - `n8n_builder/jevlab.py` : fiche du Labo Jev (six types de questions), validation en langage courant, compilation vers une spécification, remplissage par LLM global ou case par case. Une case marquée `humain` dans `ia` n'est jamais écrasée par l'IA.
 - `n8n_builder/fiches.py` : fiches types, chacune avec des cas de test.
 - `n8n_builder/hubexport.py` : OpenAPI, SKILL.md, kit (format 1) et workflow. Tout changement se vérifie avec les lecteurs du Hub (`agent_hub.studio.apis.preview`, `kitformat.parse_kit`, `skills.parse_skill_md`), voir `tests/test_jevlab.py`.
+
+## Banque de skills : à jour à chaque poussée
+
+`n8n_builder/skills/*/SKILL.md` est ce que les agents savent de Jev, de n8n et de l'outil. Toute modification qui change ce qu'un agent peut faire (route d'API, type de question, format de fiche, export) met à jour le skill concerné dans le même commit. `tests/test_skills.py` échoue si le skill du builder cite une route qui n'existe pas, ou si le Hub ne sait pas lire un skill.

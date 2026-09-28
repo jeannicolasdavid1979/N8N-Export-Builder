@@ -21,7 +21,7 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, assist, economy, fiches, generator, hubexport, jev, jevlab, templates
+from . import __version__, assist, economy, fiches, generator, hubexport, jev, jevlab, skills, templates
 from . import providers as P
 from .n8n_client import KINDS, N8nClient, N8nError, normalize_url
 from .spec import JEV_MODELS, JEV_URL, SpecError, question_vars, routes_of, uses_jev, validate
@@ -111,6 +111,22 @@ def create_app(data_dir: str | None = None, secret_key: str | None = None, passw
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
         return {"ok": True, "version": __version__}
+
+    @app.get("/api/skills")
+    async def skills_list() -> dict[str, Any]:
+        return {"skills": skills.all_skills()}
+
+    @app.get("/api/skills.zip")
+    async def skills_zip() -> Response:
+        return Response(skills.zip_bytes(), media_type="application/zip",
+                        headers={"Content-Disposition": 'attachment; filename="banque-skills.zip"'})
+
+    @app.get("/api/skills/{name}")
+    async def skill_get(name: str) -> Response:
+        text = skills.get(name)
+        if text is None:
+            raise HTTPException(404, "Skill inconnu")
+        return Response(text, media_type="text/markdown; charset=utf-8")
 
     @app.get("/api/state")
     async def state() -> dict[str, Any]:
