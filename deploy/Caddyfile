@@ -1,0 +1,5 @@
+# HTTPS automatique devant le builder. Remplacer le domaine, puis : caddy run --config deploy/Caddyfile
+builder.mondomaine.fr {
+	encode gzip
+	reverse_proxy 127.0.0.1:8790
+}

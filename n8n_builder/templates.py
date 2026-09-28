@@ -564,7 +564,11 @@ _t("vierge", "Départ", {
 def get(tid: str) -> dict[str, Any] | None:
     for t in TEMPLATES:
         if t["id"] == tid:
-            return copy.deepcopy(t)
+            out = copy.deepcopy(t)
+            trig = out["spec"].get("trigger") or {}
+            if trig.get("type") == "webhook":
+                trig.setdefault("auth", "header")  # exporte vers le hub : jamais de webhook ouvert par defaut
+            return out
     return None
 
 

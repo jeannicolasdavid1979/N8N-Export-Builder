@@ -151,7 +151,9 @@ def test_custom_jev_url_never_receives_stored_key(tmp_path, mock):
     spec = templates.get("jev-garde-fou")["spec"]
     spec["jev_url"] = "https://proxy.example/v1/systemone"
     r = c.post(f"/api/n8n/{iid}/push", json={"spec": spec}).json()
-    assert not creds.called and any("personnalisée" in n for n in r["notes"])
+    sent = [json.loads(c.request.content) for c in creds.calls]
+    assert all(c["type"] != "httpBearerAuth" and "ts-key" not in json.dumps(c) for c in sent)
+    assert any("personnalisée" in n for n in r["notes"])
 
 
 def test_update_existing_workflow(tmp_path, mock):
@@ -209,3 +211,86 @@ def test_normalize_models_formats():
 def test_extract_json_handles_fences_and_prose():
     assert extract_json("Voici :\n```json\n{\"a\": 1}\n```") == {"a": 1}
     assert extract_json("Bien sûr {\"a\": {\"b\": 2}} voilà") == {"a": {"b": 2}}
+
+
+# Labo Jev -------------------------------------------------------------------------------------------------
+
+def _fiche():
+    from n8n_builder import fiches
+    return fiches.get("tri-emails")["fiche"]
+
+
+def test_jevlab_compile_returns_possible_answers(tmp_path, mock):
+    c, _ = make(tmp_path, mock)
+    r = c.post("/api/jevlab/compile", json={"fiche": _fiche()}).json()
+    assert r["reponses"]["action"]["valeurs"] == ["oui", "non", "a_verifier"]
+    assert r["reponses"]["impact"]["valeurs"] == ["faible", "moyen", "fort", "incertain"]
+    assert r["routes"] == ["traiter_vite", "traiter", "classer", "a_relire"]
+    assert "action_verdict" in r["variables"]
+
+
+def test_jevlab_fill_keeps_human_settings(tmp_path, mock):
+    human = _fiche()
+    human["ia"] = {"questions.action.seuils": {"origine": "humain", "pourquoi": ""}}
+    for q in human["questions"]:
+        if q["id"] == "action":
+            q["seuil_oui"], q["seuil_non"] = 90, 10
+    proposal = _fiche()
+    for q in proposal["questions"]:
+        if q["id"] == "action":
+            q["seuil_oui"], q["seuil_non"] = 55, 45
+    mock.post("https://openrouter.ai/api/v1/chat/completions").respond(json={"choices": [{"message": {"content": json.dumps(
+        {"fiche": proposal, "pourquoi": {"questions.action.seuils": "Zone grise large", "objectif": "Clair"}})}}]})
+    c, _ = make(tmp_path, mock)
+    c.put("/api/providers/openrouter", json={"key": "sk-or-123456789"})
+    r = c.post("/api/jevlab/fill", json={"provider": "openrouter", "model": "m", "description": "trier", "fiche": human})
+    assert r.status_code == 200, r.text
+    f = r.json()["fiche"]
+    action = next(q for q in f["questions"] if q["id"] == "action")
+    assert (action["seuil_oui"], action["seuil_non"]) == (90, 10)
+    assert f["ia"]["objectif"] == {"origine": "ia", "pourquoi": "Clair"}
+
+
+def test_jevlab_field_proposes_one_case(tmp_path, mock):
+    mock.post("https://openrouter.ai/api/v1/chat/completions").respond(json={"choices": [{"message": {"content":
+        '{"valeur": {"seuil_oui": 80, "seuil_non": 20}, "pourquoi": "Une erreur coûte cher ici."}'}}]})
+    c, _ = make(tmp_path, mock)
+    c.put("/api/providers/openrouter", json={"key": "sk-or-123456789"})
+    r = c.post("/api/jevlab/field", json={"provider": "openrouter", "model": "m", "fiche": _fiche(), "path": "questions.action.seuils"}).json()
+    assert r["valeur"] == {"seuil_oui": 80, "seuil_non": 20}
+    assert r["fiche"]["ia"]["questions.action.seuils"]["pourquoi"] == "Une erreur coûte cher ici."
+
+
+def test_jevlab_field_rejects_unknown_path(tmp_path, mock):
+    c, _ = make(tmp_path, mock)
+    c.put("/api/providers/openrouter", json={"key": "sk-or-123456789"})
+    r = c.post("/api/jevlab/field", json={"provider": "openrouter", "model": "m", "fiche": _fiche(), "path": "ia"})
+    assert r.status_code == 422
+
+
+def test_export_zip_and_economy(tmp_path, mock):
+    import io
+    import zipfile
+    c, _ = make(tmp_path, mock)
+    r = c.post("/api/export/hub", json={"fiche": _fiche(), "base_url": "https://n8n.exemple.fr", "format": "zip"})
+    names = zipfile.ZipFile(io.BytesIO(r.content)).namelist()
+    assert set(names) == {"workflow-n8n.json", "SKILL.md", "kit.json", "LISEZMOI.md", "openapi.json", "fiche-jev.json"}
+    e = c.post("/api/economy", json={"fiche": _fiche(), "calls": 500}).json()
+    assert e["calls"] == 500 and e["economie"] > 0
+
+
+def test_push_a_fiche(tmp_path, mock):
+    mock.post(f"{N8N}/api/v1/credentials").respond(json={"id": "c1", "name": "x"})
+    create = mock.post(f"{N8N}/api/v1/workflows").respond(json={"id": "w9"})
+    c, _ = make(tmp_path, mock)
+    iid = c.post("/api/n8n", json={"kind": "vps", "url": N8N, "key": "k"}).json()["id"]
+    r = c.post(f"/api/n8n/{iid}/push", json={"fiche": _fiche()}).json()
+    assert r["id"] == "w9" and r["webhook_url"].endswith("/webhook/tri-des-e-mails-entrants")
+    assert json.loads(create.calls[0].request.content)["name"] == "Tri des e-mails entrants"
+
+
+def test_saved_fiches(tmp_path, mock):
+    c, _ = make(tmp_path, mock)
+    fid = c.post("/api/jevlab/saved", json={"fiche": _fiche()}).json()["id"]
+    assert c.get("/api/state").json()["mes_fiches"][0]["id"] == fid
+    assert c.get(f"/api/jevlab/saved/{fid}").json()["fiche"]["name"] == "Tri des e-mails entrants"

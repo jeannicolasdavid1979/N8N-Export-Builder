@@ -131,6 +131,16 @@ td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: m
 tr:last-child td { border-bottom: 0; }
 td.mono, .mono { font-family: var(--mono); font-size: 12px; word-break: break-all; }
 
+/* Labo Jev : tranches et échelles */
+.bands { position: relative; display: flex; height: 22px; border-radius: 6px; overflow: visible; font-size: 10.5px; font-weight: 700; letter-spacing: .04em; }
+.band { display: flex; align-items: center; justify-content: center; overflow: hidden; white-space: nowrap; }
+.band.no { background: var(--critical-soft); color: var(--critical); border-radius: 6px 0 0 6px; }
+.band.mid { background: var(--warning-soft); color: var(--warning); }
+.band.yes { background: var(--safe-soft); color: var(--safe); border-radius: 0 6px 6px 0; }
+.marker { position: absolute; top: -4px; bottom: -4px; width: 3px; margin-left: -1px; background: var(--text); border-radius: 2px; }
+.scale { position: relative; height: 12px; border-radius: 6px; background: linear-gradient(90deg, var(--surface-3), var(--accent-soft), var(--accent)); margin: 8px 0 4px; }
+.scale .cut { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--warning); }
+
 /* Fournisseurs */
 .prov { display: grid; grid-template-columns: 1fr; gap: 10px; }
 .prov .head { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }

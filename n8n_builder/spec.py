@@ -20,7 +20,7 @@ JEV_MODELS = ("jev-latest", "jev-preview", "jev-1.13.0")
 ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,47}$")
 ROUTE_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 PATH_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,79}$")
-OPS = (">=", ">", "<=", "<", "==", "!=", "in", "not_in", "exists", "missing")
+OPS = (">=", ">", "<=", "<", "==", "!=", "in", "not_in", "contains", "not_contains", "exists", "missing")
 TRIGGERS = ("webhook", "schedule", "manual")
 STATE_MODES = ("field", "fields", "json")
 DECISION_MODES = ("choice", "rules", "none")
@@ -109,9 +109,29 @@ def validate_questions(questions: Any, errors: list[str]) -> dict[str, Any]:
     return out
 
 
-def question_vars(questions: dict[str, Any]) -> dict[str, str]:
+def question_vars(questions: dict[str, Any], verdicts: dict[str, Any] | None = None) -> dict[str, str]:
     """Variables que la decision expose pour chaque question, avec leur nature."""
     v: dict[str, str] = {}
+    for qid, cfg in (verdicts or {}).items():
+        k = cfg.get("kind")
+        if k == "noul":
+            v[qid + "_verdict"] = f"oui (≥ {cfg['oui']:.0%}), non (≤ {cfg['non']:.0%}) ou a_verifier"
+        elif k == "choice":
+            v[qid + "_verdict"] = f"option retenue, incertain sous {cfg['min']:.0%}" + (
+                ", hesitation si les deux premières sont proches" if "marge" in cfg else "")
+            v[qid + "_classement"] = "options classées par probabilité"
+        elif k == "score":
+            v[qid + "_verdict"] = ("tranche : " + ", ".join(c["label"] for c in cfg["cuts"]) + ", " + cfg["else"]) \
+                if cfg.get("cuts") else "niveau arrondi, ou incertain"
+        elif k == "liste_choix":
+            v[qid + "_verdict"] = "élément choisi dans la liste d'entrée, ou incertain"
+            v[qid + "_classement"] = "éléments classés par probabilité"
+        elif k == "etiquettes":
+            v[qid + "_verdict"] = "étiquettes qui s'appliquent : " + ", ".join(cfg["labels"])
+            v[qid + "_nombre"] = "nombre d'étiquettes retenues"
+        elif k == "pour_chaque":
+            v[qid + "_verdict"] = "tous, certains ou aucun des éléments"
+            v[qid + "_retenus"] = "éléments retenus"
     for qid, q in questions.items():
         if q["type"] == "noul":
             v[qid] = "probabilité du oui (0 à 1)"
@@ -123,6 +143,15 @@ def question_vars(questions: dict[str, Any]) -> dict[str, str]:
             v[qid + "_norme"] = "score ramené de 0 à 1"
             v[qid + "_confiance"] = "confiance (0 à 1)"
     return v
+
+
+DYNAMIC_KINDS = ("liste_choix", "pour_chaque")
+
+
+def uses_jev(spec: dict[str, Any]) -> bool:
+    """Vrai si le workflow appelle Jev : questions fixes, ou questions construites depuis l'entree."""
+    return bool(spec["questions"]) or any(v.get("kind") in DYNAMIC_KINDS
+                                         for v in spec["decision"].get("verdicts", {}).values())
 
 
 def routes_of(spec: dict[str, Any]) -> list[str]:
@@ -217,6 +246,51 @@ def validate(raw: Any) -> dict[str, Any]:
             errors.append("Score composite : un nom et des poids {variable: poids}.")
         else:
             dec["composite"] = {"name": name, "weights": {k: _num(w, 0) for k, w in weights.items()}}
+    verdicts = d.get("verdicts") or {}
+    if not isinstance(verdicts, dict):
+        errors.append("Verdicts : objet {question: réglage} attendu.")
+        verdicts = {}
+    dec["verdicts"] = {}
+    for qid, v in verdicts.items():
+        if not isinstance(v, dict) or not ID_RE.match(str(qid)):
+            errors.append(f"Verdict « {qid} » : réglage invalide.")
+            continue
+        q = s["questions"].get(qid)
+        kind = v.get("kind") or (q["type"] if q else None)
+        if kind in ("noul", "choice", "score") and (not q or q["type"] != kind):
+            errors.append(f"Verdict « {qid} » : question {kind} introuvable.")
+            continue
+        if kind == "noul":
+            oui, non = _num(v.get("oui"), 0.7), _num(v.get("non"), 0.3)
+            if not 0 <= non <= oui <= 1:
+                errors.append(f"Verdict « {qid} » : il faut 0 ≤ seuil du non ≤ seuil du oui ≤ 1.")
+                continue
+            dec["verdicts"][qid] = {"kind": kind, "oui": oui, "non": non}
+        elif kind in ("choice", "score", "liste_choix"):
+            cfg = {"kind": kind, "min": max(0.0, min(_num(v.get("min"), 0.6), 1.0))}
+            if kind in ("choice", "liste_choix") and v.get("marge") not in (None, ""):
+                cfg["marge"] = max(0.0, min(_num(v.get("marge"), 0), 1.0))
+            if kind == "score" and v.get("cuts"):
+                cuts = [c for c in v["cuts"] if isinstance(c, dict) and ROUTE_RE.match(str(c.get("label", "")))]
+                if len(cuts) != len(v["cuts"]) or not ROUTE_RE.match(str(v.get("else", ""))):
+                    errors.append(f"Verdict « {qid} » : tranches du score mal formées (bornes et libellés).")
+                    continue
+                cfg["cuts"] = sorted(({"max": _num(c.get("max"), 0), "label": c["label"]} for c in cuts),
+                                     key=lambda c: c["max"])
+                cfg["else"] = v["else"]
+            dec["verdicts"][qid] = cfg
+        elif kind in ("etiquettes", "pour_chaque"):
+            cfg = {"kind": kind, "seuil": max(0.0, min(_num(v.get("seuil"), 0.6), 1.0))}
+            if kind == "etiquettes":
+                labels = [x for x in v.get("labels") or [] if isinstance(x, str) and ROUTE_RE.match(x)]
+                missing = [x for x in labels if f"{qid}__{x}" not in s["questions"]]
+                if not labels or missing:
+                    errors.append(f"Verdict « {qid} » : étiquettes sans question oui/non associée {missing}.")
+                    continue
+                cfg["labels"] = labels
+            dec["verdicts"][qid] = cfg
+        else:
+            errors.append(f"Verdict « {qid} » : type inconnu.")
     if dmode == "choice":
         q = d.get("question") or next((k for k, v in s["questions"].items() if v["type"] == "choice"), None)
         if not q or q not in s["questions"] or s["questions"][q]["type"] != "choice":
@@ -270,7 +344,7 @@ def validate(raw: Any) -> dict[str, Any]:
             dec["error_route"] = dec["review_route"]
         elif er and er in routes:
             dec["error_route"] = er
-        elif s["questions"]:
+        elif uses_jev(s):
             # Jev en panne ne doit jamais tomber dans une route d'action : revue humaine par defaut.
             if "a_revoir" not in dec["routes"]:
                 dec["routes"].append("a_revoir")
@@ -300,9 +374,12 @@ def validate(raw: Any) -> dict[str, Any]:
     hub = spec.get("hub") if isinstance(spec.get("hub"), dict) else {}
     s["hub"] = {k: _str(hub.get(k)) for k in ("playlist", "agent", "allege") if _str(hub.get(k))}
     s["tags"] = [t for t in (spec.get("tags") or []) if isinstance(t, str)][:10]
+    notes = spec.get("route_notes") if isinstance(spec.get("route_notes"), dict) else {}
+    s["route_notes"] = {k: _str(v)[:1000] for k, v in notes.items() if isinstance(k, str) and _str(v)}
 
     if not s["questions"] and dmode == "choice":
         errors.append("Décision par choice sans question Jev.")
     if errors:
         raise SpecError(errors)
+    s["route_notes"] = {k: v for k, v in s["route_notes"].items() if k in routes_of(s)}
     return s

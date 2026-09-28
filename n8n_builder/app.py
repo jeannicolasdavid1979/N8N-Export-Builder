@@ -21,10 +21,10 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, assist, generator, jev, templates
+from . import __version__, assist, economy, fiches, generator, hubexport, jev, jevlab, templates
 from . import providers as P
 from .n8n_client import KINDS, N8nClient, N8nError, normalize_url
-from .spec import JEV_MODELS, JEV_URL, SpecError, question_vars, routes_of, validate
+from .spec import JEV_MODELS, JEV_URL, SpecError, question_vars, routes_of, uses_jev, validate
 from .store import Store
 
 STATIC = Path(__file__).parent / "static"
@@ -34,7 +34,7 @@ def warnings_for(s: dict[str, Any]) -> list[str]:
     w = []
     if s["trigger"]["type"] == "webhook" and s["trigger"]["auth"] == "none":
         w.append("Webhook sans authentification : activez « Clé d'en-tête » avant de l'exposer sur Internet.")
-    if s["questions"]:
+    if uses_jev(s):
         w.append("Jev est entraîné surtout en anglais : testez les seuils sur une vingtaine de vrais cas français avant la production.")
         if s["model"] == "jev-latest":
             w.append("jev-latest suit la dernière version : figez jev-1.13.0 si vos seuils sont calibrés sur cette version.")
@@ -58,7 +58,7 @@ def create_app(data_dir: str | None = None, secret_key: str | None = None, passw
 
     @app.middleware("http")
     async def guard(request: Request, call_next: Any) -> Response:
-        if password:
+        if password and request.url.path != "/api/health":
             ok = False
             auth = request.headers.get("authorization", "")
             if auth.lower().startswith("basic "):
@@ -78,6 +78,10 @@ def create_app(data_dir: str | None = None, secret_key: str | None = None, passw
     @app.exception_handler(SpecError)
     async def spec_error(_: Request, e: SpecError) -> JSONResponse:
         return JSONResponse({"detail": "Spécification invalide", "errors": e.errors}, 422)
+
+    @app.exception_handler(jevlab.FicheError)
+    async def fiche_error(_: Request, e: jevlab.FicheError) -> JSONResponse:
+        return JSONResponse({"detail": "Fiche à compléter", "errors": e.errors}, 422)
 
     @app.exception_handler(P.ProviderError)
     async def provider_error(_: Request, e: P.ProviderError) -> JSONResponse:
@@ -104,13 +108,19 @@ def create_app(data_dir: str | None = None, secret_key: str | None = None, passw
                 "models_count": len(cfg.get("models") or []), "refreshed_at": cfg.get("refreshed_at"),
                 "error": cfg.get("error")}
 
+    @app.get("/api/health")
+    async def health() -> dict[str, Any]:
+        return {"ok": True, "version": __version__}
+
     @app.get("/api/state")
     async def state() -> dict[str, Any]:
         return {"version": __version__, "providers": [provider_view(p) for p in P.PROVIDERS],
                 "instances": store.instances(), "kinds": KINDS, "templates": templates.catalog(),
                 "workflows": [{"id": w["id"], "name": w["spec"].get("name"), "updated": w["updated"],
                                "pushes": w.get("pushes", [])[:3]} for w in store.workflows()],
-                "jev_models": list(JEV_MODELS)}
+                "jev_models": list(JEV_MODELS),
+                "fiches": fiches.catalog(),
+                "mes_fiches": [{"id": f["id"], "name": f["fiche"].get("name"), "updated": f["updated"]} for f in store.fiches()]}
 
     def provider_or_404(pid: str) -> P.Provider:
         p = P.BY_ID.get(pid)
@@ -184,19 +194,114 @@ def create_app(data_dir: str | None = None, secret_key: str | None = None, passw
 
     def build_response(s: dict[str, Any], n8n_base: str | None = None) -> dict[str, Any]:
         wf = generator.build(s)
-        return {"spec": s, "workflow": wf, "routes": routes_of(s), "variables": question_vars(s["questions"]),
+        return {"spec": s, "workflow": wf, "routes": routes_of(s), "variables": question_vars(s["questions"], s["decision"].get("verdicts")),
                 "curl": generator.curl_example(s, n8n_base or "https://VOTRE-N8N"), "warnings": warnings_for(s)}
 
     @app.post("/api/build")
     async def build(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
         return build_response(validate(body.get("spec")), body.get("n8n_base"))
 
+    def resolve(body: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """Specification a partir d'une spec du Labo n8n ou d'une fiche du Labo Jev."""
+        if body.get("fiche") is not None:
+            f, s = jevlab.to_spec_or_error(body["fiche"])
+            return s, f
+        return validate(body.get("spec")), None
+
+    def reference_price() -> tuple[float, float, str]:
+        pid = "openrouter"
+        cfg = store.provider(pid)
+        want = cfg.get("default_model") or "anthropic/claude-sonnet-5"
+        for m in cfg.get("models") or []:
+            if m["id"] == want and m.get("input") is not None and m.get("output") is not None and m["input"] >= 0:
+                return float(m["input"]), float(m["output"]), want
+        return 3.0, 15.0, "modèle de référence à 3 $ / 15 $ par million"
+
+    @app.post("/api/economy")
+    async def economy_route(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        s, _ = resolve(body)
+        pin, pout, label = reference_price()
+        if body.get("price_in") not in (None, ""):
+            pin, pout, label = float(body["price_in"]), float(body.get("price_out") or 0), body.get("model_label") or "prix saisis"
+        calls = max(1, min(int(body.get("calls") or 1000), 10_000_000))
+        return {**economy.estimate(s, pin, pout, calls), "modele": label, "prix": {"entree": pin, "sortie": pout}}
+
+    @app.post("/api/export/hub")
+    async def export_hub(body: dict[str, Any] = Body(...)) -> Any:
+        s, f = resolve(body)
+        base = body.get("base_url") or ""
+        if body.get("instance_id"):
+            inst = store.instance(body["instance_id"])
+            if inst:
+                base = inst["url"]
+        base = base or "https://VOTRE-N8N"
+        tests = (f or {}).get("tests") or []
+        parts = hubexport.bundle(s, base, tests, f)
+        if body.get("format") == "zip":
+            return Response(hubexport.zip_bytes(parts), media_type="application/zip", headers={
+                "Content-Disposition": f'attachment; filename="{generator.slug(s["name"])}-hub.zip"'})
+        return {"parts": parts, "base_url": base}
+
+    # Labo Jev ---------------------------------------------------------------------------------------
+
+    @app.get("/api/jevlab/fiches/{fid}")
+    async def fiche_type(fid: str) -> dict[str, Any]:
+        f = fiches.get(fid)
+        if not f:
+            raise HTTPException(404, "Fiche inconnue")
+        return f
+
+    @app.post("/api/jevlab/compile")
+    async def jev_compile(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        f, s = jevlab.to_spec_or_error(body.get("fiche"))
+        qmap = {q["id"]: {"valeurs": jevlab.allowed_values(q), "ops": jevlab.ops_for(q)} for q in f["questions"]}
+        return {"fiche": f, "reponses": qmap, **build_response(s, body.get("n8n_base"))}
+
+    def assistant_model(body: dict[str, Any]) -> tuple[str, P.Provider, str]:
+        pid = body.get("provider") or "openrouter"
+        p = provider_or_404(pid)
+        model = body.get("model") or store.provider(pid).get("default_model")
+        if not model:
+            raise HTTPException(400, "Choisissez un modèle pour l'assistant.")
+        return pid, p, model
+
+    @app.post("/api/jevlab/fill")
+    async def jev_fill(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        pid, p, model = assistant_model(body)
+        if not (body.get("description") or "").strip() and not body.get("fiche"):
+            raise HTTPException(400, "Décrivez ce que l'automate doit décider.")
+        return await jevlab.llm_fill(pid, store.provider_key(pid), model, body.get("description") or "",
+                                     body.get("context") or "", body.get("fiche"),
+                                     store.provider(pid).get("base_url") if p.base_editable else None)
+
+    @app.post("/api/jevlab/field")
+    async def jev_field(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        pid, p, model = assistant_model(body)
+        return await jevlab.llm_field(pid, store.provider_key(pid), model, body.get("fiche") or {}, str(body.get("path") or ""),
+                                      body.get("consigne") or "", store.provider(pid).get("base_url") if p.base_editable else None)
+
+    @app.get("/api/jevlab/saved/{fid}")
+    async def get_saved_fiche(fid: str) -> dict[str, Any]:
+        f = store.fiche(fid)
+        if not f:
+            raise HTTPException(404, "Fiche inconnue")
+        return f
+
+    @app.post("/api/jevlab/saved")
+    async def save_fiche(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        f = jevlab.validate_fiche(body.get("fiche"))
+        return {"id": store.save_fiche(body.get("id"), f)}
+
+    @app.delete("/api/jevlab/saved/{fid}")
+    async def delete_saved_fiche(fid: str) -> dict[str, Any]:
+        return {"deleted": store.delete_fiche(fid)}
+
     @app.post("/api/jev/ask")
     async def jev_ask(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
-        # Toujours l'adresse officielle : la cle TypeSafe enregistree ne part jamais vers une autre adresse.
+        # Adresse officielle, ou celle fixee par l'administrateur (N8NB_JEV_URL) : jamais une adresse venue de l'interface.
         async with http() as c:
             return await jev.ask(store.provider_key("typesafe") or "", body.get("state"), body.get("questions") or {},
-                                 body.get("model") or "jev-latest", JEV_URL, client=c)
+                                 body.get("model") or "jev-latest", os.environ.get("N8NB_JEV_URL") or JEV_URL, client=c)
 
     @app.post("/api/assist")
     async def assist_route(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
@@ -283,7 +388,7 @@ def create_app(data_dir: str | None = None, secret_key: str | None = None, passw
     @app.post("/api/n8n/{iid}/push")
     async def push(iid: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
         inst = instance_or_404(iid)
-        s = validate(body.get("spec"))
+        s, _ = resolve(body)
         creds: dict[str, dict[str, str]] = {}
         secret = None
         notes: list[str] = []
@@ -292,7 +397,7 @@ def create_app(data_dir: str | None = None, secret_key: str | None = None, passw
                 def fp(v: str) -> str:
                     return hashlib.sha256(v.encode()).hexdigest()[:16]
 
-                if s["questions"]:
+                if uses_jev(s):
                     key = store.provider_key("typesafe")
                     if s["jev_url"] != JEV_URL:
                         notes.append("Adresse Jev personnalisée : la clé TypeSafe enregistrée n'y est pas envoyée, "

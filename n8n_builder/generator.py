@@ -17,7 +17,7 @@ import uuid
 from typing import Any
 
 from .providers import BY_ID
-from .spec import question_vars, routes_of, slug
+from .spec import question_vars, routes_of, slug, uses_jev
 
 NS = uuid.UUID("6f1c9a52-8b0e-4d59-9a57-2f3e1c0b7d41")
 
@@ -87,7 +87,7 @@ def prep_code(s: dict[str, Any]) -> str:
 def decision_code(s: dict[str, Any]) -> str:
     d = s["decision"]
     cfg = {
-        "uses_jev": bool(s["questions"]),
+        "uses_jev": uses_jev(s),
         "mode": d["mode"],
         "routes": routes_of(s),
         "error_route": d["error_route"],
@@ -97,6 +97,7 @@ def decision_code(s: dict[str, Any]) -> str:
         "review_route": d.get("review_route"),
         "rules": d.get("rules", []),
         "composite": d.get("composite"),
+        "verdicts": d.get("verdicts") or {},
     }
     post = d["post_js"].strip()
     post_block = (
@@ -143,6 +144,8 @@ function test(v, op, x) {
     case '!=': return String(v) !== String(x);
     case 'in': return list.includes(String(v));
     case 'not_in': return !list.includes(String(v));
+    case 'not_contains': return !(Array.isArray(v) ? v : String(v ?? '').split(',')).map(t => String(t).trim()).includes(String(x));
+    case 'contains': return (Array.isArray(v) ? v : String(v ?? '').split(',')).map(t => String(t).trim()).includes(String(x));
     case 'exists': return v !== undefined && v !== null && v !== '' && !(Array.isArray(v) && v.length === 0);
     case 'missing': return v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0);
   }
@@ -161,6 +164,37 @@ function decide(prep, res) {
     reason = 'Jev indisponible ou réponse invalide : ' + String((err && (err.message || err.description)) || JSON.stringify(err || res || null)).slice(0, 200);
   } else {
     Object.assign(vars, flatten(answers));
+    // Verdicts : la réponse de Jev devient un mot lisible par les règles et par un humain.
+    for (const [id, v] of Object.entries(CFG.verdicts)) {
+      const a = answers[id];
+      if (v.kind === 'noul' && a) vars[id + '_verdict'] = a.noul >= v.oui ? 'oui' : (a.noul <= v.non ? 'non' : 'a_verifier');
+      else if ((v.kind === 'choice' || v.kind === 'liste_choix') && a) {
+        const items = v.kind === 'liste_choix' ? ((prep.vars || {})['__' + id] || []) : null;
+        const label = k => items ? (items[Number(String(k).replace(/^c/, ''))] ?? k) : k;
+        const ranked = Object.entries(a.probabilities || {}).sort((x, y) => y[1] - x[1]);
+        vars[id + '_classement'] = ranked.map(([k, p]) => ({ valeur: label(k), probabilite: fmt(p) }));
+        if (!(a.confidence >= v.min)) vars[id + '_verdict'] = 'incertain';
+        else if (v.marge !== undefined && ranked.length > 1 && ranked[0][1] - ranked[1][1] < v.marge) vars[id + '_verdict'] = 'hesitation';
+        else vars[id + '_verdict'] = label(a.choice);
+      } else if (v.kind === 'liste_choix') {
+        const items = (prep.vars || {})['__' + id] || [];
+        vars[id + '_verdict'] = items.length === 1 ? items[0] : 'aucun';
+        vars[id + '_classement'] = items.map(x => ({ valeur: x, probabilite: 1 }));
+      } else if (v.kind === 'score' && a) {
+        if (!(a.confidence >= v.min)) vars[id + '_verdict'] = 'incertain';
+        else if (v.cuts) { const c = v.cuts.find(c => a.score <= c.max); vars[id + '_verdict'] = c ? c.label : v.else; }
+        else vars[id + '_verdict'] = String(Math.round(a.score));
+      } else if (v.kind === 'etiquettes') {
+        const kept = v.labels.filter(l => answers[id + '__' + l] && answers[id + '__' + l].noul >= v.seuil);
+        vars[id + '_verdict'] = kept; vars[id + '_nombre'] = kept.length;
+      } else if (v.kind === 'pour_chaque') {
+        const items = (prep.vars || {})['__' + id] || [];
+        const kept = items.filter((it, i) => answers[id + '__' + i] && answers[id + '__' + i].noul >= v.seuil);
+        vars[id + '_retenus'] = kept;
+        vars[id + '_verdict'] = kept.length === 0 ? 'aucun' : (kept.length === items.length ? 'tous' : 'certains');
+      }
+    }
+    for (const k of Object.keys(vars)) if (k.startsWith('__')) delete vars[k];
     if (CFG.composite) {
       let tot = 0, w = 0;
       for (const [k, p] of Object.entries(CFG.composite.weights)) {
@@ -253,8 +287,8 @@ def note_text(s: dict[str, Any]) -> str:
             lines.append("Allège l'agent : " + h["allege"])
     lines.append("")
     lines.append("**Routes** : " + ", ".join(routes_of(s)))
-    if s["questions"]:
-        lines.append("**Variables Jev** : " + ", ".join(question_vars(s["questions"])))
+    if uses_jev(s):
+        lines.append("**Variables Jev** : " + ", ".join(question_vars(s["questions"], s["decision"].get("verdicts"))))
         lines.append("Identifiant à créer : Bearer « TypeSafe Jev » (clé console.typesafe.ai).")
     return "\n".join(lines)
 
@@ -316,7 +350,7 @@ def build(s: dict[str, Any], credentials: dict[str, dict[str, str]] | None = Non
     link(prev, cur)
     prev, x = cur, x + STEP
 
-    if s["questions"]:
+    if uses_jev(s):
         params = {
             "method": "POST",
             "url": s["jev_url"],

@@ -16,3 +16,9 @@ Interface, documentation et messages de commit en français. Pas de tiret cadrat
 
 - `pytest` (avec `node` dans le PATH pour les tests d'exécution du JavaScript généré).
 - Un changement du générateur se vérifie aussi contre un vrai n8n : l'API publique refuse toute clé de nœud inconnue.
+
+## Labo Jev et export
+
+- `n8n_builder/jevlab.py` : fiche du Labo Jev (six types de questions), validation en langage courant, compilation vers une spécification, remplissage par LLM global ou case par case. Une case marquée `humain` dans `ia` n'est jamais écrasée par l'IA.
+- `n8n_builder/fiches.py` : fiches types, chacune avec des cas de test.
+- `n8n_builder/hubexport.py` : OpenAPI, SKILL.md, kit (format 1) et workflow. Tout changement se vérifie avec les lecteurs du Hub (`agent_hub.studio.apis.preview`, `kitformat.parse_kit`, `skills.parse_skill_md`), voir `tests/test_jevlab.py`.

@@ -6,14 +6,35 @@ Le moteur de décision est **Jev** (TypeSafe AI, sorti le 15 septembre 2026) : u
 
 Conçu pour le [Hub d'agents](https://github.com/jeannicolasdavid1979/hub-d-agents) : chaque playlist du hub a son workflow prêt à l'emploi.
 
-## Ce que fait l'outil
+## Deux labos, une sortie : une playlist du Hub
 
-| Espace | Rôle |
-|---|---|
-| **Atelier** | Bibliothèque de 16 modèles, éditeur de spécification (déclencheur, préparation, questions Jev, règles, routes, LLM de secours), aperçu du schéma, test avec Jev ou avec des réponses saisies, export JSON |
-| **Assistant de conception** | Un LLM transforme une description en spécification, qui passe par la même validation que la saisie manuelle. Il sert à la conception, jamais à l'exécution |
-| **Modèles LLM** | OpenRouter en tête, puis Ollama Cloud, Ollama local, TypeSafe Jev, Anthropic, OpenAI, Gemini, Mistral, DeepSeek, Groq, xAI, Together, Cerebras. Listes de modèles lues en direct chez chaque fournisseur (prix et contexte pour OpenRouter, taille pour Ollama local). Clés chiffrées, jamais renvoyées à l'interface |
-| **Instances n8n** | Local, VPS ou n8n Cloud par l'API publique. Envoi, remplacement d'un workflow existant, création des identifiants (Jev, LLM, clé du webhook), activation |
+| Espace | Pour qui | Rôle |
+|---|---|---|
+| **Labo Jev** | novice comme pro | Un automate en cases à remplir. L'IA remplit chaque case et explique son choix (« Pourquoi ? ») ; vous ajustez ce que vous voulez, la case passe « Réglé par vous » et l'IA ne la touche plus. Essai direct, banc d'essai, calibrage automatique des seuils sur vos cas |
+| **Labo n8n** | pro | Tous les réglages du générateur : préparation en JavaScript, règles sur les probabilités brutes, score composite, sources RSS ou HTTP, LLM de secours sur une route. Bibliothèque de modèles |
+| **Modèles LLM** | tous | OpenRouter en tête, puis Ollama Cloud, Ollama local, TypeSafe Jev, Anthropic, OpenAI, Gemini, Mistral, DeepSeek, Groq, xAI, Together, Cerebras. Listes de modèles lues en direct (prix et contexte pour OpenRouter). Clés chiffrées, jamais renvoyées à l'interface |
+| **Instances n8n** | tous | Local, VPS ou n8n Cloud par l'API publique : envoi, remplacement, identifiants, activation |
+
+Les deux labos exportent vers le Hub d'agents : **OpenAPI** (l'automate devient un outil de la playlist), **SKILL.md** (la consigne de l'agent, route par route), **kit** (une playlist complète avec épreuves tirées des cas de test) et le **workflow n8n**. Ces formats sont vérifiés avec le code d'import du Hub lui-même.
+
+## Jev à pleine capacité
+
+Jev n'est pas qu'un juge oui/non. Le Labo Jev en expose six usages, tous posés en un seul appel :
+
+| Type de case | Ce que Jev rend | Ce que vous réglez |
+|---|---|---|
+| Oui / non | probabilité du oui | tranches en % : NON jusqu'à X, À VÉRIFIER, OUI à partir de Y |
+| Choix parmi des mots (jusqu'à 255) | le mot et la probabilité de chacun | mots attendus et leur sens, confiance minimale, seuil d'hésitation entre les deux premiers |
+| Score sur une échelle | un score continu entre deux niveaux | niveaux, tranches nommées (faible, moyen, fort…) |
+| Choix dans une liste reçue | l'élément choisi et le classement complet | champ de la liste : reclassement de brouillons, choix d'outil, valeur extraite |
+| Étiquettes multiples | toutes les étiquettes qui s'appliquent | étiquettes, seuil |
+| Pour chaque élément | oui/non par élément d'une liste | question, seuil ; verdict tous, certains ou aucun |
+
+Chaque question peut porter des **données de référence** (liste de concurrents, catégories autorisées…), citées dans la question entre accents graves.
+
+## Pourquoi des automates plutôt qu'un LLM qui interprète
+
+Un automate réglé est déterministe : la même entrée donne toujours la même décision, relisible règle par règle. Il coûte l'entrée de Jev (0,042 $ par million de tokens) au lieu d'un raisonnement de LLM, et l'agent ne lit plus qu'un verdict court. Chaque labo affiche l'estimation des tokens et des dollars épargnés sur 1 000 décisions, au prix du modèle de référence choisi dans OpenRouter.
 
 ## Démarrer
 
@@ -22,11 +43,7 @@ pip install -e .
 n8n-export-builder            # http://127.0.0.1:8790
 ```
 
-Avec Docker, à côté de n8n :
-
-```bash
-docker compose up -d          # builder sur :8790, mot de passe dans .env
-```
+Sur un VPS : [docs/installation-vps.md](docs/installation-vps.md) (Docker, HTTPS par Caddy ou tunnel SSH).
 
 | Variable | Rôle |
 |---|---|
@@ -34,6 +51,7 @@ docker compose up -d          # builder sur :8790, mot de passe dans .env
 | `N8NB_SECRET_KEY` | clé Fernet de chiffrement des clés d'API ; générée dans `<données>/.secret` si absente |
 | `N8NB_PASSWORD` | mot de passe de l'interface (authentification HTTP Basic). **Obligatoire** dès que le builder écoute hors de la machine locale : il refuse de démarrer sinon |
 | `N8NB_HOST`, `N8NB_PORT` | adresse d'écoute (défaut `127.0.0.1:8790`) |
+| `N8NB_JEV_URL` | adresse de Jev pour les essais du builder (proxy d'entreprise ou test) ; jamais modifiable depuis l'interface |
 
 ## Parcours type
 

@@ -172,6 +172,31 @@ class Store:
                 del w["pushes"][20:]
                 self._save()
 
+    # Fiches du Labo Jev ----------------------------------------------------------------------------
+
+    def fiches(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return sorted(({"id": k, **v} for k, v in self._data.setdefault("fiches", {}).items()),
+                          key=lambda w: -w.get("updated", 0))
+
+    def fiche(self, fid: str) -> dict[str, Any] | None:
+        with self._lock:
+            f = self._data.setdefault("fiches", {}).get(fid)
+            return {"id": fid, **f} if f else None
+
+    def save_fiche(self, fid: str | None, fiche: dict[str, Any]) -> str:
+        with self._lock:
+            fid = fid or "fj_" + secrets.token_hex(4)
+            self._data.setdefault("fiches", {})[fid] = {"fiche": fiche, "updated": time.time()}
+            self._save()
+            return fid
+
+    def delete_fiche(self, fid: str) -> bool:
+        with self._lock:
+            ok = self._data.setdefault("fiches", {}).pop(fid, None) is not None
+            self._save()
+            return ok
+
     def delete_workflow(self, wid: str) -> bool:
         with self._lock:
             ok = self._data["workflows"].pop(wid, None) is not None
