@@ -57,7 +57,7 @@ Sur un VPS : [docs/installation-vps.md](docs/installation-vps.md) (Docker, HTTPS
 
 1. **Modèles LLM** : collez la clé TypeSafe (console.typesafe.ai) et, pour l'assistant et le LLM de secours, une clé OpenRouter ou l'adresse de votre Ollama.
 2. **Instances n8n** : reliez votre n8n (Paramètres, API n8n, Créer une clé).
-3. **Atelier** : choisissez un modèle ou décrivez le besoin à l'assistant. Testez avec l'exemple, ajustez les seuils.
+3. **Labo Jev** (cases guidées, IA qui explique) ou **Labo n8n** (modèles et réglages complets) : partez d'une fiche ou d'un modèle, ou décrivez le besoin à l'IA. Testez, calibrez.
 4. **Envoyer vers n8n** : le workflow arrive avec ses identifiants, activé. Si un workflow actif occupe déjà le chemin du webhook, choisissez « Remplacer ».
 5. **Hub d'agents** : Catalogue, Ajouter une API, collez l'exemple curl fourni ; la clé du webhook va au coffre. Ajoutez l'API à la playlist de l'agent.
 
@@ -72,23 +72,21 @@ Déclencheur → [Source RSS/HTTP] → Préparer les données (JS) → Jev (HTTP
 - Les questions sont envoyées en un seul appel Jev. Le nœud Jev réessaie trois fois ; en cas d'échec, le cas part sur la route d'erreur (revue humaine), jamais sur une route d'action.
 - Un nœud vide par route, où brancher vos actions (Slack, CRM, e-mail, agent).
 - Le webhook répond `{route, raison, variables, extra, jev_modele}` : c'est ce que reçoit l'agent du hub.
-- Le test de l'Atelier exécute dans le navigateur le code exact des nœuds générés.
+- Le test des deux labos exécute dans le navigateur le code exact des nœuds générés.
 
-## Bibliothèque
+## Bibliothèque : 50 modèles, trois niveaux
 
-| Modèle | Playlist du hub | Ce que l'agent n'a plus à faire |
+| Niveau | Nombre | Ce qu'il contient |
 |---|---|---|
-| Support client : triage des tickets | Support client (support-bot) | classer, repérer urgence, frustration, remboursement |
-| Relance factures : niveau de relance | Relance des factures impayées | calculer les retards, choisir le niveau, éviter la double relance (100 % code) |
-| Relance factures : classer la réponse | Relance des factures impayées | interpréter la réponse, isoler les demandes de changement de RIB |
-| Notes de frais : contrôle | Contrôle des notes de frais | plafonds, justificatif, doublons |
-| Prospection : qualification et score | Prospection commerciale | appliquer la grille, rédiger seulement pour les prospects chauds |
-| Alertes sécurité et serveurs : triage | Triage des alertes, Surveillance des serveurs | trier le bruit, décider de réveiller l'astreinte |
-| Veille concurrentielle : tri des articles | Veille concurrentielle (veille-bot) | écarter les doublons et le hors sujet, ne résumer que l'utile |
-| Vidéo réseaux sociaux : contrôle du brief | Générateur Vidéo Réseaux Sociaux (Video-bot) | refuser personne réelle et voix clonée, vérifier durée, lisibilité sans son, formats |
-| Choix de la consigne réutilisable | Générateur Vidéo Réseaux Sociaux | parcourir son catalogue de consignes |
-| KYC : complétude du dossier | Pré-analyse de dossiers KYC | lister pièces manquantes et expirées (100 % code) |
-| Routage par intention, Garde-fou, Score composite, Vérification de citation, Filtre RAG | toutes | patrons de la documentation TypeSafe |
+| 1, simple | 15 | du code seul (IBAN et SIREN, TVA, SLA, métriques serveur, normalisation de contact, déclinaison vidéo…) ou une seule question Jev |
+| 2, intermédiaire | 23 | plusieurs questions, verdicts par tranches, étiquettes multiples, mémoire de l'automate |
+| 3, avancé | 12 | questions construites depuis l'entrée (une par clause, par terme de recherche, par candidat), sources RSS, extraction fiable, appel de fonction, LLM sur une route |
+
+Répartition : 26 modèles pour les playlists du Hub (support, relances, notes de frais, prospection, alertes, veille, Video-bot, KYC, contrats, crédit, fournisseurs, rapprochement, Gmail, LinkedIn, Google Ads, Telegram…), 12 modèles métiers (e-commerce, RGPD, SLA, CRM, veille réglementaire…), 11 primitives Jev, 1 modèle vierge. Neuf sont du pur code, les 41 autres appellent Jev.
+
+Plusieurs modèles reprennent des patrons publiés, réécrits en déterministe et crédités dans leur fiche : cookbooks TypeSafe (routage par intention, garde-fou, score composite, citation, RAG, auto-cohérence, classement hiérarchique, extraction de dates, appel de fonction, alignement d'entités, reclassement), « Building effective agents » d'Anthropic (vote en parallèle, évaluateur), cookbook Anthropic (modération, routage de tickets), modèles communautaires n8n (tri d'e-mails, anti-spam de formulaire).
+
+Chaque modèle est vérifié de trois façons : exécution de son code sur des cas choisis (`tests/test_library.py`), import, activation et appel dans un vrai n8n 2.40, et lecture de son export par le code du Hub.
 
 ## Limites, sans fard
 
@@ -107,6 +105,6 @@ pip install -e ".[dev]"
 pytest            # les tests d'exécution du JavaScript généré demandent node dans le PATH
 ```
 
-Validé contre n8n 2.40.7 : les 16 modèles sont acceptés par l'API publique, activés, et répondent correctement par webhook (Jev simulé), y compris l'authentification par en-tête, la branche LLM et la panne de Jev.
+Validé contre n8n 2.40.7 : les 50 modèles et les 9 fiches du Labo Jev sont acceptés par l'API publique, activés, et répondent correctement par webhook (Jev simulé), y compris l'authentification par en-tête, la branche LLM et la panne de Jev. Juste après l'activation, n8n peut mettre une ou deux secondes à enregistrer le webhook.
 
 Sources : [API TypeSafe](https://docs.typesafe.ai/api), [modèles et tarifs Jev](https://docs.typesafe.ai/models), [annonce de Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev), [API publique n8n](https://docs.n8n.io/api/).

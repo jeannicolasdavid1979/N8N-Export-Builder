@@ -33,11 +33,11 @@ def test_state_lists_providers_in_order(tmp_path, mock):
 
 def test_keys_are_encrypted_and_never_returned(tmp_path, mock):
     c, _ = make(tmp_path, mock)
-    r = c.put("/api/providers/openrouter", json={"key": "sk-or-v1-secret-1234"})
+    r = c.put("/api/providers/openrouter", json={"key": "sk-or-v1-QZXWKV-1234"})
     assert r.json()["key_hint"] == "…1234"
     body = c.get("/api/state").text
-    assert "secret" not in body
-    assert "secret" not in (tmp_path / "builder.json").read_text()
+    assert "QZXWKV" not in body
+    assert "QZXWKV" not in (tmp_path / "builder.json").read_text()
 
 
 def test_refresh_openrouter_models_live_format(tmp_path, mock):

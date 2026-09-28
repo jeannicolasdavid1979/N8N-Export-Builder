@@ -194,7 +194,7 @@ def create_app(data_dir: str | None = None, secret_key: str | None = None, passw
 
     def build_response(s: dict[str, Any], n8n_base: str | None = None) -> dict[str, Any]:
         wf = generator.build(s)
-        return {"spec": s, "workflow": wf, "routes": routes_of(s), "variables": question_vars(s["questions"], s["decision"].get("verdicts")),
+        return {"spec": s, "workflow": wf, "routes": routes_of(s), "uses_jev": uses_jev(s), "variables": question_vars(s["questions"], s["decision"].get("verdicts")),
                 "curl": generator.curl_example(s, n8n_base or "https://VOTRE-N8N"), "warnings": warnings_for(s)}
 
     @app.post("/api/build")

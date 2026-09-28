@@ -190,14 +190,19 @@ function renderLibrary() {
         } })));
     }
   }
-  for (const fam of ['Playlists du Hub', 'Primitives Jev', 'Départ']) {
+  const NIV = { 1: 'Simple', 2: 'Intermédiaire', 3: 'Avancé' };
+  put(lib, h('div', { class: 'row', style: 'margin:10px 0 4px' }, [0, 1, 2, 3].map(n => h('button', {
+    class: 'small' + ((S.niveau || 0) === n ? ' primary' : ''), text: n ? NIV[n] : 'Tous', onclick: () => { S.niveau = n; renderLibrary(); } }))));
+  for (const fam of ['Playlists du Hub', 'Métiers', 'Primitives Jev', 'Départ']) {
     if (!fams[fam]) continue;
     put(lib, h('h3', { text: fam, style: 'margin-top:14px' }));
     for (const t of fams[fam]) {
-      put(lib, h('button', { class: 'tpl' + (S.tplId === t.id ? ' active' : ''), onclick: () => loadTemplate(t.id) },
+      if (S.niveau && t.niveau !== S.niveau) continue;
+      put(lib, h('button', { class: 'tpl' + (S.tplId === t.id ? ' active' : ''), title: t.source ? 'Inspiré de : ' + t.source : '', onclick: () => loadTemplate(t.id) },
         h('b', { text: t.name }),
         h('span', { class: 'small', text: t.hub && t.hub.playlist ? 'Playlist : ' + t.hub.playlist : t.description.slice(0, 110) }),
         h('span', { class: 'tags' },
+          h('span', { class: 'badge', text: 'Niveau ' + t.niveau }),
           t.uses_jev ? h('span', { class: 'badge accent', text: 'Jev' }) : h('span', { class: 'badge ok', text: '100 % code' }),
           t.llm ? h('span', { class: 'badge warn', text: 'LLM sur une route' }) : null,
           h('span', { class: 'badge', text: { webhook: 'Webhook', schedule: 'Planifié', manual: 'Manuel' }[t.trigger] }))));
@@ -217,6 +222,8 @@ function renderEditor() {
     s.hub && s.hub.playlist ? h('div', { class: 'notice info' },
       h('b', { text: 'Hub d\'agents : ' }), `playlist ${s.hub.playlist}${s.hub.agent ? ', agent ' + s.hub.agent : ''}. `,
       s.hub.allege ? 'Allège l\'agent : ' + s.hub.allege : '') : null));
+  const tpl = S.data.templates.find(t => t.id === S.tplId);
+  if (tpl && tpl.source) put(ed, h('p', { class: 'small faint', text: 'Inspiré de : ' + tpl.source + '. Réécrit en déterministe et vérifié dans n8n.' }));
   put(ed, triggerCard(), dataCard(), questionsCard(), decisionCard(), llmCard(), sampleCard());
 }
 
@@ -546,7 +553,7 @@ function renderPreview() {
 
 function testCard() {
   const b = S.build, spec = b.spec;
-  const usesJev = Object.keys(spec.questions).length > 0;
+  const usesJev = b.uses_jev;
   const jevReady = (provider('typesafe') || {}).configured;
   const card = h('div', { class: 'card stack' }, h('h2', { text: 'Tester avec l\'exemple' }),
     h('p', { class: 'small muted', text: 'Le test exécute ici le code exact des nœuds n8n générés. ' + (usesJev ? 'Jev est appelé avec votre clé, ou remplacé par des réponses saisies à la main.' : 'Aucun appel à Jev : tout est calculé.') }),
@@ -606,7 +613,8 @@ async function runTest(mode) {
   S.manual = null;
   let res = null, t0 = performance.now();
   if (mode === 'jev') {
-    try { res = await api('POST', '/api/jev/ask', { state: p.state, questions: p.questions, model: spec.model }); }
+    if (!Object.keys(p.questions).length) res = { model: 'aucune question pour cette entrée', answers: {} };
+    else try { res = await api('POST', '/api/jev/ask', { state: p.state, questions: p.questions, model: spec.model }); }
     catch (e) { S.test = { error: e.message, fallback: spec.decision.error_route, prep: p }; return renderPreview(); }
   }
   finishTest(ctx, res, Math.round(performance.now() - t0));
@@ -638,7 +646,7 @@ function manualForm() {
     const q = qs[id];
     let ctl;
     if (a.type === 'noul') ctl = h('div', { class: 'row' }, inputEl(a.noul, v => { a.noul = Number(v); out.textContent = fmtNum(a.noul, 2); }, { type: 'range', min: 0, max: 1, step: 0.05, style: 'flex:1' }), 'oui ', null);
-    else if (a.type === 'choice') ctl = h('div', { class: 'row' }, selectEl(Object.keys(q.criteria), a.choice, v => { a.choice = v; }, { style: 'flex:1' }),
+    else if (a.type === 'choice') ctl = h('div', { class: 'row' }, selectEl(Object.entries(q.criteria).map(([k, d]) => [k, d && typeof d === 'string' && /^c\d+$/.test(k) ? d.slice(0, 70) : k]), a.choice, v => { a.choice = v; }, { style: 'flex:1' }),
       inputEl(a.confidence, v => { a.confidence = Number(v); }, { type: 'number', step: 0.05, min: 0, max: 1, style: 'width:80px', title: 'confiance' }));
     else ctl = h('div', { class: 'row' }, inputEl(a.score, v => { a.score = Number(v); }, { type: 'number', step: 0.1, min: 0, max: q.criteria.length - 1, style: 'width:80px', title: `0 à ${q.criteria.length - 1}` }),
       h('span', { class: 'small faint', text: `0 = ${q.criteria[0]}, ${q.criteria.length - 1} = ${q.criteria[q.criteria.length - 1]}` }));
@@ -915,10 +923,10 @@ function renderGuide(main) {
       h('li', { text: 'Les limites de débit de TypeSafe changent souvent en ce moment : le nœud Jev réessaie trois fois, puis envoie le cas sur la route d\'erreur.' })),
     h('h2', { text: 'Du builder au Hub d\'agents' }),
     h('ol', {},
-      h('li', { text: 'Choisissez un modèle de la famille « Playlists du Hub » ou décrivez votre besoin à l\'assistant.' }),
-      h('li', { text: 'Testez avec l\'exemple, ajustez les seuils, enregistrez.' }),
-      h('li', { text: 'Envoyez vers votre instance n8n avec la clé d\'en-tête activée. Notez la clé affichée une fois.' }),
-      h('li', { text: 'Dans le Hub, Catalogue, Ajouter une API : collez l\'exemple curl et placez la clé au coffre. Ajoutez l\'API à la playlist de l\'agent, en lecture.' }),
+      h('li', { text: 'Labo Jev : partez d\'une fiche type ou faites remplir les cases par l\'IA, lisez ses « Pourquoi ? », ajustez. Labo n8n : partez d\'un des 50 modèles.' }),
+      h('li', { text: 'Testez, lancez le banc d\'essai, appliquez le calibrage proposé, enregistrez.' }),
+      h('li', { text: 'Envoyez vers votre instance n8n (clé d\'en-tête activée par défaut). Notez la clé affichée une fois.' }),
+      h('li', { text: 'Exporter vers le Hub : déposez openapi.json (Connecteurs, API par sa description OpenAPI, clé au coffre), importez SKILL.md dans les skills et ajoutez-le à la playlist ; ou installez kit.json dans le Studio pour une playlist complète.' }),
       h('li', { text: 'L\'agent appelle le workflow comme un outil et reçoit route, raison et variables. Il agit selon la route, sans refaire le tri.' })),
     h('h2', { text: 'Ce que produit chaque workflow' }),
     P('Déclencheur, préparation en JavaScript lisible, un appel HTTP à Jev avec trois essais, un nœud de décision en JavaScript sans modèle, un aiguillage par route, un nœud vide par route où brancher vos actions, un LLM facultatif sur une seule route, et une réponse JSON pour les webhooks. Uniquement des nœuds du cœur de n8n.'),
@@ -1508,7 +1516,7 @@ function manualEditor(e) {
   const rows = Object.entries(answers).map(([id, a]) => {
     let ctl;
     if (a.type === 'noul') { const out = h('span', { class: 'small mono', text: Math.round(a.noul * 100) + ' %' }); ctl = h('div', { class: 'row' }, h('input', { type: 'range', min: 0, max: 1, step: 0.01, value: a.noul, style: 'flex:1', oninput: ev => { a.noul = Number(ev.target.value); out.textContent = Math.round(a.noul * 100) + ' %'; } }), out); }
-    else if (a.type === 'choice') ctl = h('div', { class: 'row' }, selectEl(Object.keys(answers[id].probabilities || {}).length ? Object.keys(answers[id].probabilities) : Object.keys(runPrep(e.input).prep[0].json.questions[id].criteria), a.choice, v => { a.choice = v; }, { style: 'flex:1' }),
+    else if (a.type === 'choice') ctl = h('div', { class: 'row' }, selectEl(Object.entries(runPrep(e.input).prep[0].json.questions[id].criteria).map(([k, d]) => [k, /^c\d+$/.test(k) && typeof d === 'string' ? d.slice(0, 70) : k]), a.choice, v => { a.choice = v; }, { style: 'flex:1' }),
       inputEl(a.confidence, v => { a.confidence = Number(v); }, { type: 'number', step: 0.05, min: 0, max: 1, style: 'width:80px', title: 'confiance' }));
     else ctl = inputEl(a.score, v => { a.score = Number(v); }, { type: 'number', step: 0.1, min: 0, style: 'width:90px' });
     return h('tr', {}, h('td', { class: 'mono small', text: id }), h('td', {}, ctl));

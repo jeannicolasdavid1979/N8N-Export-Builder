@@ -6,13 +6,15 @@ Deux familles :
 - playlists du Hub d'agents : un workflow par playlist ou kit du hub, qui prend en charge la partie
   deterministe du travail et ne laisse a l'agent que ce qui demande vraiment du jugement.
 
-Chaque modele porte un exemple d'entree (sample) : il sert au test dans l'Atelier et au declencheur manuel.
+Chaque modele porte un exemple d'entree (sample) : il sert au test dans le Labo n8n et au declencheur manuel.
 """
 
 from __future__ import annotations
 
 import copy
 from typing import Any
+
+from .spec import uses_jev, validate
 
 TEMPLATES: list[dict[str, Any]] = []
 
@@ -561,6 +563,27 @@ _t("vierge", "Départ", {
 })
 
 
+NIVEAUX = {"jev-routage-intention": 2, "jev-garde-fou": 2, "jev-score-composite": 2, "jev-verification-citation": 2,
+           "jev-filtre-rag": 3, "hub-support-triage": 2, "hub-relance-niveau": 1, "hub-relance-reponse": 1,
+           "hub-notes-de-frais": 3, "hub-prospection-score": 3, "hub-triage-alertes": 2, "hub-veille-pertinence": 3,
+           "hub-video-brief": 3, "hub-choix-consigne": 1, "hub-kyc-completude": 1, "vierge": 1}
+SOURCES = {"jev-routage-intention": "Cookbook TypeSafe « Intent routing »", "jev-garde-fou": "Cookbook TypeSafe « Guardrails for LLMs »",
+           "jev-score-composite": "Cookbook TypeSafe « Composite scoring »",
+           "jev-verification-citation": "Cookbook TypeSafe « Double-checking citations »",
+           "jev-filtre-rag": "Cookbook TypeSafe « Classifying RAG passages »", "hub-choix-consigne": "Cookbook TypeSafe « Skill suggestion »",
+           "hub-support-triage": "Recette « ticket routing » du cookbook Anthropic, réécrite avec Jev"}
+for _x in TEMPLATES:
+    _x["niveau"] = NIVEAUX.get(_x["id"], 2)
+    _x["source"] = SOURCES.get(_x["id"], "")
+
+from .templates_plus import PLUS  # noqa: E402
+
+_vierge = next(x for x in TEMPLATES if x["id"] == "vierge")
+TEMPLATES.remove(_vierge)
+TEMPLATES.extend(PLUS)
+TEMPLATES.append(_vierge)
+
+
 def get(tid: str) -> dict[str, Any] | None:
     for t in TEMPLATES:
         if t["id"] == tid:
@@ -576,7 +599,8 @@ def catalog() -> list[dict[str, Any]]:
     out = []
     for t in TEMPLATES:
         s = t["spec"]
-        out.append({"id": t["id"], "family": t["family"], "name": s["name"], "description": s["description"],
-                    "uses_jev": bool(s.get("questions")), "llm": bool(s.get("llm")), "trigger": s["trigger"]["type"],
+        out.append({"id": t["id"], "family": t["family"], "niveau": t.get("niveau", 2), "source": t.get("source", ""),
+                    "name": s["name"], "description": s["description"],
+                    "uses_jev": uses_jev(validate(s)), "llm": bool(s.get("llm")), "trigger": s["trigger"]["type"],
                     "hub": s.get("hub", {})})
     return out
