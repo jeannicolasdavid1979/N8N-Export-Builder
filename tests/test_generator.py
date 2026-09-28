@@ -225,3 +225,21 @@ def test_choice_mode_uses_confidence_gate():
     assert execute("hub-choix-consigne", low)["d"]["route"] == "agent_decide"
     low["consigne"]["confidence"] = 0.8
     assert execute("hub-choix-consigne", low)["d"]["route"] == "carrousel_instagram"
+
+
+def test_several_llms_entry_and_per_route():
+    raw = templates.get("hub-support-triage")["spec"]
+    raw["entree_llm"] = {"provider": "openrouter", "model": "xiaomi/mimo-v2.6-flash"}
+    raw["llms"] = [{"route": "humain", "provider": "openrouter", "model": "anthropic/claude-sonnet-5"},
+                   {"route": "facturation", "provider": "ollama_cloud", "model": "glm-5.3"}]
+    creds = {"jev": {"id": "1", "name": "J"}, "llm:openrouter": {"id": "2", "name": "OR"}, "llm:ollama_cloud": {"id": "3", "name": "OC"}}
+    s = validate(raw)
+    wf = G.build(s, creds)
+    by = {n["name"]: n for n in wf["nodes"]}
+    assert "xiaomi/mimo-v2.6-flash" in by["LLM d'entrée (agent)"]["parameters"]["jsonBody"]
+    assert wf["connections"]["Préparer les données"]["main"][0][0]["node"] == "LLM d'entrée (agent)"
+    assert wf["connections"]["État depuis le LLM"]["main"][0][0]["node"] == "Jev (TypeSafe)"
+    assert by["LLM : humain"]["credentials"] == {"httpBearerAuth": creds["llm:openrouter"]}
+    assert by["LLM : facturation"]["parameters"]["url"] == "https://ollama.com/v1/chat/completions"
+    assert by["LLM : facturation"]["credentials"] == {"httpBearerAuth": creds["llm:ollama_cloud"]}
+    assert s["llm"]["route"] == "humain"

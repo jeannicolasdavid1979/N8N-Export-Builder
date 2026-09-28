@@ -352,22 +352,38 @@ def validate(raw: Any) -> dict[str, Any]:
         else:
             dec["error_route"] = "a_revoir" if "a_revoir" in routes else dec["default_route"]
 
-    llm = spec.get("llm")
-    if llm:
-        if not isinstance(llm, dict):
-            errors.append("LLM de secours : objet attendu.")
-        else:
-            l = {"route": _str(llm.get("route")), "provider": _str(llm.get("provider")) or "openrouter",
-                 "model": _str(llm.get("model")), "system": _str(llm.get("system")) or
-                 "Tu traites les cas que les règles déterministes n'ont pas su trancher. Réponds brièvement, en français.",
-                 "base_url": _str(llm.get("base_url"))}
-            if not l["model"]:
-                errors.append("LLM de secours : choisir un modèle.")
-            if not errors and l["route"] not in routes_of(s):
-                errors.append(f"LLM de secours : la route « {l['route']} » n'existe pas.")
-            s["llm"] = l
-    else:
-        s["llm"] = None
+    def _llm(raw: Any, where: str, need_route: bool) -> dict[str, Any] | None:
+        if not isinstance(raw, dict):
+            errors.append(f"{where} : objet attendu.")
+            return None
+        l = {"route": _str(raw.get("route")), "provider": _str(raw.get("provider")) or "openrouter",
+             "model": _str(raw.get("model")), "system": _str(raw.get("system")) or
+             "Tu traites les cas que les règles déterministes n'ont pas su trancher. Réponds brièvement, en français.",
+             "base_url": _str(raw.get("base_url"))}
+        if not l["model"]:
+            errors.append(f"{where} : choisir un modèle.")
+        if need_route and not errors and l["route"] not in routes_of(s):
+            errors.append(f"{where} : la route « {l['route']} » n'existe pas.")
+        return l
+
+    # Plusieurs LLM : un par route (llms), plus « llm » garde pour compatibilite.
+    raw_llms = ([spec["llm"]] if spec.get("llm") else []) + list(spec.get("llms") or [])
+    s["llms"] = []
+    for i, raw in enumerate(raw_llms, 1):
+        l = _llm(raw, f"LLM de route {i}", True)
+        if l and all(x["route"] != l["route"] for x in s["llms"]):
+            s["llms"].append(l)
+    s["llm"] = s["llms"][0] if s["llms"] else None
+    ent = spec.get("entree_llm")
+    s["entree_llm"] = None
+    if ent:
+        l = _llm(ent, "LLM d'entrée", False)
+        if l:
+            l.pop("route")
+            if not _str(ent.get("system")):
+                l["system"] = ("Tu reçois une demande brute. Réécris-la en un texte court, factuel et complet qui servira "
+                               "d'état à un modèle de décision. N'invente rien, ne réponds pas à la demande.")
+            s["entree_llm"] = l
 
     sample = spec.get("sample")
     s["sample"] = sample if isinstance(sample, (dict, list)) else {}

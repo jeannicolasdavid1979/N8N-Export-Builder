@@ -114,7 +114,9 @@ function emptySpec(raw) {
   s.decision.rules = s.decision.rules || [];
   s.decision.routes = s.decision.routes || [];
   s.sample = s.sample ?? {};
-  s.llm = s.llm || null;
+  s.llms = [...(s.llm ? [s.llm] : []), ...(s.llms || [])];
+  delete s.llm;
+  s.entree_llm = s.entree_llm || null;
   s.model = s.model || 'jev-latest';
   return s;
 }
@@ -127,10 +129,11 @@ async function loadTemplate(tid) {
 }
 
 function applyDefaultLlm() {
-  const l = S.spec.llm;
+  const l = (S.spec.llms || [])[0];
   if (!l) return;
   const p = provider(l.provider);
   if (l.model === 'openrouter/auto' && p && p.default_model) l.model = p.default_model;
+  S.spec.llms = [l, ...(S.spec.llms || []).filter(x => x !== l)];
 }
 
 async function loadSaved(wid) {
@@ -215,6 +218,13 @@ function renderEditor() {
   if (!ed) return;
   clear(ed);
   const s = S.spec;
+  put(ed, tuto('n8n', 'le Labo n8n en 5 étapes', [
+    ['Choisissez un modèle à gauche (filtre Simple, Intermédiaire, Avancé) ou décrivez votre besoin à l\'assistant.'],
+    ['Lisez le schéma à droite : ', h('b', { text: 'Préparer' }), ' (code), ', h('b', { text: 'Jev' }), ' (répond aux questions), ', h('b', { text: 'Décision' }), ' (règles), puis une ', h('b', { text: 'route' }), '.'],
+    ['Ajustez les questions (section 3) et les seuils des règles (section 4). Chaque (i) explique la notion.'],
+    ['Testez avec l\'exemple : « Réponses manuelles » permet d\'essayer sans clé Jev.'],
+    ['Envoyez vers n8n, puis « Exporter vers le Hub » pour donner l\'automate à une playlist.'],
+  ]));
   put(ed, assistantCard());
   put(ed, h('div', { class: 'card stack' },
     field('Nom du workflow', inputEl(s.name, v => { s.name = v; changed(); })),
@@ -224,7 +234,9 @@ function renderEditor() {
       s.hub.allege ? 'Allège l\'agent : ' + s.hub.allege : '') : null));
   const tpl = S.data.templates.find(t => t.id === S.tplId);
   if (tpl && tpl.source) put(ed, h('p', { class: 'small faint', text: 'Inspiré de : ' + tpl.source + '. Réécrit en déterministe et vérifié dans n8n.' }));
-  put(ed, triggerCard(), dataCard(), questionsCard(), decisionCard(), llmCard(), sampleCard());
+  put(ed, triggerCard(), dataCard(), questionsCard(), decisionCard(),
+    llmSetup(() => ({ entree: s.entree_llm, routes: s.llms }), v => { if ('entree' in v) s.entree_llm = v.entree; if ('routes' in v) s.llms = v.routes; }, currentRoutes(), st => changed(st)),
+    sampleCard());
 }
 
 function assistantCard() {
@@ -479,27 +491,6 @@ function ruleEl(r, i) {
     conds);
 }
 
-function llmCard() {
-  const s = S.spec, l = s.llm;
-  const chat = chatProviders();
-  const card = h('div', { class: 'card stack' }, h('div', { class: 'section-title' }, h('h2', { text: '5. LLM de secours sur une route' }),
-    h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: !!l, onchange: e => {
-      const p = chat.find(x => x.configured) || chat[0];
-      s.llm = e.target.checked ? { route: currentRoutes()[0], provider: p.id, model: p.default_model || '', system: 'Tu traites les cas que les règles déterministes n\'ont pas su trancher. Réponds brièvement, en français.' } : null;
-      changed(true);
-    } }), 'Activer')));
-  if (!l) { put(card, h('p', { class: 'small muted', text: 'Facultatif. Un LLM n\'est appelé que pour la route choisie (rédiger un brouillon, résumer) : les autres routes restent sans modèle génératif.' })); return card; }
-  put(card, h('div', { class: 'row' },
-    field('Route', selectEl(currentRoutes(), l.route, v => { l.route = v; changed(); }), 'w180'),
-    field('Fournisseur', selectEl(chat.map(p => [p.id, p.label + (p.configured ? '' : ' (non configuré)')]), l.provider, v => { l.provider = v; l.model = (provider(v) || {}).default_model || ''; changed(true); }), 'w240'),
-    field('Modèle', modelInput(l.provider, l.model, v => { l.model = v; changed(); }), 'grow')),
-  field('Consigne système', textArea(l.system, v => { l.system = v; changed(); }, { rows: 3 })),
-  l.provider === 'ollama_local' ? h('p', { class: 'small muted', text: 'Ollama local : dans n8n sous Docker, l\'adresse par défaut est http://host.docker.internal:11434/v1. Modifiable ci-dessous.' }) : null,
-  h('details', { open: l.base_url ? true : null }, h('summary', { text: 'Adresse de l\'API (compatible OpenAI)' }),
-    inputEl(l.base_url, v => { l.base_url = v; changed(); }, { placeholder: (provider(l.provider) || {}).base_url })));
-  return card;
-}
-
 function sampleCard() {
   const s = S.spec;
   const err = h('span', { class: 'small', style: 'color:var(--critical)' });
@@ -521,12 +512,12 @@ function renderPreview() {
   const b = S.build;
   if (!b) { put(pv, h('div', { class: 'card empty', text: 'Génération…' })); return; }
   const wf = b.workflow, spec = b.spec;
-  const main = wf.nodes.filter(n => n.type !== 'n8n-nodes-base.stickyNote' && !n.name.startsWith('Route : ') && ![ 'LLM de secours', 'Fusion LLM', 'Répondre' ].includes(n.name)).sort((a, c) => a.position[0] - c.position[0]);
-  const kind = n => n.name.startsWith('Jev') ? 'jev' : (n.type.endsWith('.code') ? 'code' : '');
+  const main = wf.nodes.filter(n => n.type !== 'n8n-nodes-base.stickyNote' && !n.name.startsWith('Route : ') && !n.name.startsWith('LLM : ') && !n.name.startsWith('Fusion LLM') && ![ 'LLM de secours', 'Répondre' ].includes(n.name)).sort((a, c) => a.position[0] - c.position[0]);
+  const kind = n => n.name.startsWith('Jev') ? 'jev' : (n.name.startsWith('LLM') ? 'llm' : (n.type.endsWith('.code') ? 'code' : ''));
   const flow = h('div', { class: 'flow' });
   main.forEach((n, i) => { if (i) put(flow, h('div', { class: 'farrow', text: '↓' })); put(flow, h('div', { class: 'fnode ' + kind(n) }, h('span', { text: n.name }), h('span', { class: 'faint', text: n.type.split('.').pop() }))); });
   const hit = S.test && S.test.decision && S.test.decision.route;
-  put(flow, h('div', { class: 'farrow', text: '↓' }), h('div', { class: 'routes' }, b.routes.map(r => h('span', { class: 'route' + (r === hit ? ' hit' : '') + (spec.llm && spec.llm.route === r ? ' llm' : ''), text: r }))));
+  put(flow, h('div', { class: 'farrow', text: '↓' }), h('div', { class: 'routes' }, b.routes.map(r => h('span', { class: 'route' + (r === hit ? ' hit' : '') + ((spec.llms || []).some(l => l.route === r) ? ' llm' : ''), text: r }))));
   if (spec.trigger.type === 'webhook') put(flow, h('div', { class: 'farrow', text: '↓' }), h('div', { class: 'fnode' }, h('span', { text: 'Répondre' }), h('span', { class: 'faint', text: 'JSON : route, raison, variables' })));
 
   put(pv, h('div', { class: 'card' }, h('h2', { text: 'Schéma généré' }), flow,
@@ -740,6 +731,12 @@ function pushResult(r) {
 async function renderModels(main) {
   put(main, h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Modèles LLM' }),
     h('p', { class: 'muted', text: 'Clés chiffrées sur ce serveur, jamais renvoyées à l\'interface. Listes de modèles lues en direct chez chaque fournisseur.' }))));
+  put(main, tuto('modeles', 'brancher des modèles', [
+    ['Une clé OpenRouter suffit pour des centaines de modèles (Claude, GPT, Mimo, DeepSeek…). Collez-la dans la carte OpenRouter.'],
+    ['« Voir les modèles », filtrez, puis « Par défaut » : ce modèle sera proposé partout. Vous pouvez en choisir un autre dans chaque case LLM.'],
+    ['Collez la clé TypeSafe dans la carte Jev pour tester vos automates en vrai.'],
+    ['Ollama local : aucune clé, indiquez seulement l\'adresse de votre machine.'],
+  ]));
   const list = h('div', { class: 'prov' });
   put(main, list);
   S.data.providers.forEach((p, i) => put(list, providerCard(p, i + 1)));
@@ -844,6 +841,11 @@ async function testProvider(p) {
 async function renderN8n(main) {
   put(main, h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Instances n8n' }),
     h('p', { class: 'muted', text: 'Reliez un n8n local, sur VPS ou n8n Cloud par son API publique. Le builder y envoie les workflows, les identifiants et les active.' }))));
+  put(main, tuto('n8n', 'relier n8n', [
+    ['Dans n8n : Paramètres, API n8n, Créer une clé. Copiez-la.'],
+    ['Ici : choisissez Local, VPS ou Cloud, collez l\'adresse de n8n et la clé, puis « Relier et tester ».'],
+    ['Depuis un labo, « Envoyer vers n8n » crée le workflow, ses identifiants et l\'active.'],
+  ]));
   const list = h('div', { class: 'grid two' });
   for (const i of S.data.instances) put(list, instanceCard(i));
   put(main, list.childNodes.length ? list : h('div', { class: 'card empty', text: 'Aucune instance reliée.' }));
@@ -1073,12 +1075,23 @@ function renderJevEditor() {
   if (!ed) return;
   clear(ed);
   const f = J.fiche;
-  put(ed, jAssistCard(),
+  put(ed, tuto('jev', 'régler un automate Jev', [
+    ['Jev ne rédige pas : il ', h('b', { text: 'juge' }), '. Il répond à vos questions par des probabilités (oui à 82 %, « facture » à 91 %…).'],
+    ['Faites remplir les cases par l\'IA, ou partez d\'une fiche type à gauche. Chaque case dit qui l\'a remplie ; « Pourquoi ? » montre le raisonnement de l\'IA.'],
+    ['Les ', h('b', { text: 'tranches' }), ' transforment une probabilité en mot : sous le seuil du NON, c\'est non ; au-dessus du seuil du OUI, c\'est oui ; entre les deux, « à vérifier ».'],
+    ['Les ', h('b', { text: 'règles' }), ' lisent ces mots dans l\'ordre : la première qui s\'applique choisit le résultat.'],
+    ['Essayez à droite, puis lancez le banc d\'essai : le calibrage propose des seuils qui respectent vos cas.'],
+    ['Facultatif : ajoutez des LLM (un en entrée, un par résultat) dans la section dédiée.'],
+  ]),
+  jAssistCard(),
     h('div', { class: 'card stack' },
       field('Nom de l\'automate', inputEl(f.name, v => { f.name = v; jChanged(); })),
       h('div', { class: 'row between' }, h('label', { text: 'Ce que l\'automate décide', style: 'margin:0' }), originBadge('objectif')),
       textArea(f.objectif, v => { f.objectif = v; touch('objectif'); }, { rows: 2 }), whyBox('objectif')),
-    jEntreeCard(), jQuestionsCard(), jResultatsCard(), jReglesCard(), jTestsCard());
+    jEntreeCard(), jQuestionsCard(), jResultatsCard(), jReglesCard(),
+    llmSetup(() => ({ entree: f.llm_entree, routes: f.llms || [] }), v => { if ('entree' in v) f.llm_entree = v.entree; if ('routes' in v) f.llms = v.routes; },
+      f.resultats.map(r => r.id), st => jChanged(st)),
+    jTestsCard());
 }
 
 function jAssistCard() {
@@ -1124,7 +1137,7 @@ function jQuestionsCard() {
   const card = h('div', { class: 'card' },
     h('div', { class: 'section-title' }, h('h2', { text: `2. Questions posées à Jev (${f.questions.length})` }),
       selectEl([['', '+ Ajouter une question…'], ...Object.entries(QTYPES).map(([k, v]) => [k, v[0]])], '', v => { if (v) addJQuestion(v); })),
-    h('p', { class: 'small muted', text: 'Toutes les questions partent en un seul appel à Jev. Une question = un seul jugement.' }));
+    h('p', { class: 'small muted' }, 'Toutes les questions partent en un seul appel à Jev. Une question = un seul jugement. ', info('Six types : oui/non, choix parmi des mots, score, choix dans une liste reçue, étiquettes multiples, question pour chaque élément. Le menu « Ajouter une question » les propose tous.')));
   f.questions.forEach((q, i) => put(card, jQuestionEl(q, i)));
   return card;
 }
@@ -1184,7 +1197,7 @@ function jQuestionEl(q, i) {
     const bars = h('div');
     const redraw = () => put(clear(bars), bandBar(q.seuil_non, q.seuil_oui));
     redraw();
-    put(el, seuilHead('Tranches de pourcentage'), bars,
+    put(el, seuilHead('Tranches de pourcentage'), h('p', { class: 'small muted' }, info('Jev rend la probabilité du oui. Sous le seuil du NON, verdict « non » ; au-dessus du seuil du OUI, « oui » ; entre les deux, « à vérifier ». Plus une erreur coûte cher, plus on écarte les seuils.'), ' Glissez les curseurs : la barre montre les trois zones.'), bars,
       h('div', { class: 'row' },
         pctInput(q.seuil_non, v => { q.seuil_non = Math.min(v, q.seuil_oui); redraw(); touch(seuils); }, 'NON jusqu\'à'),
         pctInput(q.seuil_oui, v => { q.seuil_oui = Math.max(v, q.seuil_non); redraw(); touch(seuils); }, 'OUI à partir de')),
@@ -1598,6 +1611,55 @@ async function openHubExport(payload) {
   put(clear(dlg), body);
   dlg.showModal();
   draw();
+}
+
+// Pédagogie : tutoriels repliables et (i) -------------------------------------------------------------
+
+function info(text) {
+  const tip = h('span', { class: 'info-tip', text });
+  const b = h('button', { class: 'info', type: 'button', title: text, 'aria-label': 'Explication', text: 'i',
+    onclick: e => { e.preventDefault(); e.stopPropagation(); tip.classList.toggle('open'); } });
+  return h('span', { class: 'info-wrap' }, b, tip);
+}
+function lab(text, tip) { return h('label', {}, text, ' ', tip ? info(tip) : null); }
+function tuto(key, title, steps) {
+  let closed = false;
+  try { closed = localStorage.getItem('tuto-' + key) === 'ferme'; } catch { /* stockage indisponible */ }
+  const d = h('details', { class: 'card tuto', open: closed ? null : true,
+    ontoggle: e => { try { localStorage.setItem('tuto-' + key, e.target.open ? 'ouvert' : 'ferme'); } catch { /* rien */ } } },
+    h('summary', { text: 'Tutoriel : ' + title }), h('ol', {}, steps.map(s => h('li', {}, ...(Array.isArray(s) ? s : [s])))));
+  return d;
+}
+
+// Plusieurs LLM dans un automate : un en entrée (agentique), un par route ------------------------------
+
+function llmSetup(get, set, routes, onChange) {
+  const chat = chatProviders();
+  const def = () => { const p = chat.find(x => x.configured) || chat[0]; return { provider: p.id, model: p.default_model || '', system: '' }; };
+  const card = h('div', { class: 'card stack' },
+    h('h2', {}, 'LLM de l\'automate (facultatif) ', info('Un automate peut combiner plusieurs modèles : un LLM agentique en entrée qui met la demande au propre, Jev qui décide, et un LLM par route qui rédige. Chaque case choisit son propre modèle, par exemple via OpenRouter.')),
+    h('div', { class: 'notice info small' }, 'Schéma : ', h('b', { text: 'LLM d\'entrée' }), ' (reformule) → ', h('b', { text: 'Jev' }), ' (décide) → ', h('b', { text: 'LLM de route' }), ' (rédige la réponse de cette route). Sans LLM, l\'automate reste 100 % déterministe.'));
+  const row = (l, onDel, withRoute) => h('div', { class: 'qcard stack' },
+    h('div', { class: 'row' },
+      withRoute ? field('Route', selectEl(routes, l.route, v => { l.route = v; onChange(); }), 'w180') : null,
+      field('Fournisseur', selectEl(chat.map(p => [p.id, p.label + (p.configured ? '' : ' (non configuré)')]), l.provider, v => { l.provider = v; l.model = (provider(v) || {}).default_model || ''; onChange(true); }), 'w180'),
+      h('div', { class: 'field grow' }, lab('Modèle', 'Tapez pour chercher parmi les modèles du fournisseur (liste lue en direct). Exemple OpenRouter : xiaomi/mimo-v2.6-flash.'), modelInput(l.provider, l.model, v => { l.model = v; onChange(); })),
+      h('button', { class: 'ghost danger', text: 'Retirer', onclick: onDel })),
+    h('div', {}, lab('Consigne', withRoute ? 'Ce que le LLM rédige pour cette route. Il reçoit l\'entrée et la décision (route, raison, variables).' : 'Ce que le LLM fait de la demande brute avant Jev. Sa réponse devient l\'état jugé par Jev.'),
+      textArea(l.system, v => { l.system = v; onChange(); }, { rows: 2, placeholder: withRoute ? 'Rédige une réponse courte…' : 'Réécris la demande en texte court et factuel, sans y répondre.' })));
+  const cur = get();
+  put(card, h('h3', {}, 'LLM d\'entrée (agentique) ', info('Utile quand l\'entrée est brouillonne (e-mail long, conversation). Il nettoie ; Jev juge ensuite un texte clair. Coûte un appel LLM par passage.')));
+  if (cur.entree) put(card, row(cur.entree, () => { set({ entree: null }); onChange(true); }, false));
+  else put(card, h('button', { class: 'small', text: '+ Ajouter un LLM d\'entrée', onclick: () => { set({ entree: def() }); onChange(true); } }));
+  put(card, h('h3', {}, 'LLM par route ', info('Un modèle différent peut servir chaque route : un petit modèle pour remercier, un gros pour un litige. Les routes sans LLM restent sans coût de LLM.')));
+  (cur.routes || []).forEach((l, i) => put(card, row(l, () => { cur.routes.splice(i, 1); set({ routes: cur.routes }); onChange(true); }, true)));
+  put(card, h('button', { class: 'small', text: '+ Ajouter un LLM sur une route', disabled: !routes.length, onclick: () => {
+    const used = new Set((cur.routes || []).map(x => x.route));
+    const r = routes.find(x => !used.has(x));
+    if (!r) return toast('Toutes les routes ont déjà un LLM.', true);
+    set({ routes: [...(cur.routes || []), { ...def(), route: r }] }); onChange(true);
+  } }));
+  return card;
 }
 
 // Démarrage -------------------------------------------------------------------------------------------

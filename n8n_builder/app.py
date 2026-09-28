@@ -407,19 +407,20 @@ def create_app(data_dir: str | None = None, secret_key: str | None = None, passw
                                                                {"token": key}, fp(key))
                     else:
                         notes.append("Clé TypeSafe absente : choisissez l'identifiant Jev dans n8n après l'envoi.")
-                if s["llm"]:
-                    pid = s["llm"]["provider"]
+                used = [l for l in (s["llms"] + ([s["entree_llm"]] if s.get("entree_llm") else []))]
+                for l in used:
+                    pid = l["provider"]
                     p = P.BY_ID.get(pid)
                     key = store.provider_key(pid)
-                    custom = s["llm"]["base_url"] and p and not p.base_editable and s["llm"]["base_url"].rstrip("/") != p.base_url
-                    if custom:
+                    if not p or p.auth == "none" or "llm:" + pid in creds:
+                        continue
+                    if l["base_url"] and not p.base_editable and l["base_url"].rstrip("/") != p.base_url:
                         notes.append(f"Adresse du LLM personnalisée : la clé {p.label} enregistrée n'y est pas envoyée.")
-                    elif p and p.auth != "none":
-                        if key:
-                            creds["llm"] = await ensure_credential(c, iid, "llm:" + pid, f"LLM {p.label} (builder)",
-                                                                   "httpBearerAuth", {"token": key}, fp(key))
-                        else:
-                            notes.append(f"Clé {p.label} absente : choisissez l'identifiant du LLM dans n8n après l'envoi.")
+                    elif key:
+                        creds["llm:" + pid] = await ensure_credential(c, iid, "llm:" + pid, f"LLM {p.label} (builder)",
+                                                                      "httpBearerAuth", {"token": key}, fp(key))
+                    else:
+                        notes.append(f"Clé {p.label} absente : choisissez l'identifiant du LLM dans n8n après l'envoi.")
                 if s["trigger"]["type"] == "webhook" and s["trigger"]["auth"] == "header":
                     secret = secrets.token_urlsafe(24)
                     creds["webhook"] = await c.create_credential(f"Clé webhook {s['trigger']['path']} (builder)",

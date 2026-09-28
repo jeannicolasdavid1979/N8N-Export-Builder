@@ -32,6 +32,8 @@ N_LLM = "LLM de secours"
 N_MERGE = "Fusion LLM"
 N_RESPOND = "Répondre"
 N_NOTE = "Note"
+N_LLM_IN = "LLM d'entrée (agent)"
+N_STATE_IN = "État depuis le LLM"
 
 JS_HEADER = "// Généré par N8N Export Builder. Modifiable : la logique est lisible et sans appel à un modèle.\n"
 
@@ -266,6 +268,41 @@ def sample_code(sample: Any) -> str:
     return JS_HEADER + f"const EXEMPLES = {js(items)};\nreturn EXEMPLES.map(json => ({{ json }}));\n"
 
 
+def entry_code() -> str:
+    return JS_HEADER + (
+        "// Le LLM d'entrée a réécrit la demande : sa réponse devient l'état envoyé à Jev.\n"
+        f"const preps = $({js(N_PREP)}).all();\n"
+        "return $input.all().map((item, i) => {\n"
+        "  const p = Object.assign({}, preps[i] ? preps[i].json : {});\n"
+        "  const r = item.json || {};\n"
+        "  const text = r.choices && r.choices[0] && r.choices[0].message && r.choices[0].message.content;\n"
+        "  if (text) { try { p.state = JSON.parse(text); } catch (e) { p.state = text; } }\n"
+        "  p.vars = Object.assign({}, p.vars, { llm_entree: text ? 'ok' : 'échec : état d\\'origine gardé' });\n"
+        "  return { json: p };\n"
+        "});\n"
+    )
+
+
+def llm_params(llm: dict[str, Any], user_expr: str) -> dict[str, Any]:
+    base, needs_auth = llm_base(llm)
+    body = ("={{ JSON.stringify({ model: " + js(llm["model"]) + ", temperature: 0, messages: ["
+            "{ role: 'system', content: " + js(llm["system"]) + " }, "
+            "{ role: 'user', content: " + user_expr + " }] }) }}")
+    params: dict[str, Any] = {"method": "POST", "url": base + "/chat/completions"}
+    if needs_auth:
+        params.update(authentication="genericCredentialType", genericAuthType="httpBearerAuth")
+    params.update(sendBody=True, specifyBody="json", jsonBody=body, options={"timeout": 120000})
+    return params
+
+
+def llm_extra(llm: dict[str, Any], creds: dict[str, Any]) -> dict[str, Any]:
+    extra: dict[str, Any] = {"onError": "continueRegularOutput"}
+    c = creds.get("llm:" + llm["provider"]) or creds.get("llm")
+    if c and llm_base(llm)[1]:
+        extra["credentials"] = {"httpBearerAuth": c}
+    return extra
+
+
 def llm_base(llm: dict[str, Any]) -> tuple[str, bool]:
     p = BY_ID.get(llm["provider"])
     base = llm.get("base_url") or (p.base_url if p else "https://openrouter.ai/api/v1")
@@ -350,6 +387,16 @@ def build(s: dict[str, Any], credentials: dict[str, dict[str, str]] | None = Non
     link(prev, cur)
     prev, x = cur, x + STEP
 
+    ent = s.get("entree_llm")
+    if ent:
+        cur = node(N_LLM_IN, "n8n-nodes-base.httpRequest", 4.2, llm_params(ent, "JSON.stringify($json.state)"), x, Y,
+                   **llm_extra(ent, creds))
+        link(prev, cur)
+        prev, x = cur, x + STEP
+        cur = node(N_STATE_IN, "n8n-nodes-base.code", 2, {"jsCode": entry_code()}, x, Y)
+        link(prev, cur)
+        prev, x = cur, x + STEP
+
     if uses_jev(s):
         params = {
             "method": "POST",
@@ -395,7 +442,8 @@ def build(s: dict[str, Any], credentials: dict[str, dict[str, str]] | None = Non
     respond = None
     if t["type"] == "webhook":
         respond = N_RESPOND
-    llm = s["llm"]
+    llms = {l["route"]: l for l in s["llms"]}
+    single = len(llms) == 1
     ends: list[str] = []
     span = 180
     top = Y - span * (len(routes) - 1) // 2
@@ -409,30 +457,20 @@ def build(s: dict[str, Any], credentials: dict[str, dict[str, str]] | None = Non
         else:
             link(prev, name)
         end = name
-        if llm and llm["route"] == r:
-            base, needs_auth = llm_base(llm)
-            body = ("={{ JSON.stringify({ model: " + js(llm["model"]) + ", temperature: 0, messages: ["
-                    "{ role: 'system', content: " + js(llm["system"]) + " }, "
-                    "{ role: 'user', content: JSON.stringify({ entree: $json.input, decision: { route: $json.route, raison: $json.reason, variables: $json.vars } }) }"
-                    "] }) }}")
-            params = {"method": "POST", "url": base + "/chat/completions", "sendBody": True, "specifyBody": "json",
-                      "jsonBody": body, "options": {"timeout": 120000}}
-            extra = {"onError": "continueRegularOutput"}
-            if needs_auth:
-                params = {"method": "POST", "url": base + "/chat/completions", "authentication": "genericCredentialType",
-                          "genericAuthType": "httpBearerAuth", "sendBody": True, "specifyBody": "json",
-                          "jsonBody": body, "options": {"timeout": 120000}}
-                if "llm" in creds:
-                    extra["credentials"] = {"httpBearerAuth": creds["llm"]}
-            node(N_LLM, "n8n-nodes-base.httpRequest", 4.2, params, x + STEP, y, **extra)
-            node(N_MERGE, "n8n-nodes-base.code", 2, {"jsCode": merge_code()}, x + 2 * STEP, y)
-            link(name, N_LLM)
-            link(N_LLM, N_MERGE)
-            end = N_MERGE
+        if r in llms:
+            l = llms[r]
+            n_llm, n_merge = (N_LLM, N_MERGE) if single else (f"LLM : {r}", f"Fusion LLM : {r}")
+            user = ("JSON.stringify({ entree: $json.input, decision: { route: $json.route, raison: $json.reason, "
+                    "variables: $json.vars } })")
+            node(n_llm, "n8n-nodes-base.httpRequest", 4.2, llm_params(l, user), x + STEP, y, **llm_extra(l, creds))
+            node(n_merge, "n8n-nodes-base.code", 2, {"jsCode": merge_code()}, x + 2 * STEP, y)
+            link(name, n_llm)
+            link(n_llm, n_merge)
+            end = n_merge
         ends.append(end)
 
     if respond:
-        rx = x + (3 if llm else 1) * STEP
+        rx = x + (3 if llms else 1) * STEP
         body = ("={{ JSON.stringify({ route: $json.route, raison: $json.reason, variables: $json.vars, "
                 "extra: $json.extra, jev_modele: $json.jev ? $json.jev.model : null }) }}")
         node(respond, "n8n-nodes-base.respondToWebhook", 1.1,

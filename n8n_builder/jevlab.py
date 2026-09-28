@@ -232,6 +232,9 @@ def validate_fiche(raw: Any) -> dict[str, Any]:
     f["ia"] = {k: {"origine": v.get("origine") if v.get("origine") in ("ia", "humain", "calibrage") else "humain",
                    "pourquoi": _s(v.get("pourquoi"), 800)}
                for k, v in ia.items() if isinstance(k, str) and isinstance(v, dict)}
+    # LLM facultatifs : un en entree (agentique), un par resultat ; valides a la compilation.
+    f["llm_entree"] = raw.get("llm_entree") if isinstance(raw.get("llm_entree"), dict) else None
+    f["llms"] = [x for x in raw.get("llms") or [] if isinstance(x, dict)][:10]
     hub = raw.get("hub") if isinstance(raw.get("hub"), dict) else {}
     f["hub"] = {k: _s(hub.get(k), 200) for k in ("playlist", "agent") if _s(hub.get(k))}
     if err:
@@ -343,6 +346,7 @@ def compile_fiche(f: dict[str, Any]) -> dict[str, Any]:
         "sample": f["exemple"] if not isinstance(f["exemple"], str) else {e["field"]: f["exemple"]},
         "hub": f["hub"], "route_notes": {r["id"]: r["consigne"] for r in f["resultats"] if r["consigne"]},
         "tags": ["labo-jev"],
+        "entree_llm": f.get("llm_entree"), "llms": f.get("llms") or [],
     }
     return validate(raw)
 

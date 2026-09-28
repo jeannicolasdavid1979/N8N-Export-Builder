@@ -167,3 +167,13 @@ dialog::backdrop { background: rgba(10, 12, 30, .45); }
   main { padding: 16px; } .workbench { grid-template-columns: 1fr; } .library { position: static; max-height: none; }
   .kinds { grid-template-columns: 1fr; } .crit { grid-template-columns: 1fr; } .cond { grid-template-columns: 1fr 1fr; }
 }
+
+/* Pédagogie */
+.tuto { border-left: 4px solid var(--accent); }
+.tuto summary { color: var(--accent-text); }
+.tuto ol { margin: 8px 0 0; padding-left: 20px; } .tuto li { margin-bottom: 4px; }
+.info-wrap { position: relative; display: inline; }
+.info { display: inline-flex; align-items: center; justify-content: center; width: 17px; height: 17px; padding: 0; border-radius: 50%;
+  font: italic 700 11px/1 Georgia, serif; background: var(--accent-soft); color: var(--accent-text); border: 1px solid var(--accent); vertical-align: middle; }
+.info-tip { display: none; font-weight: 400; font-size: 12.5px; color: var(--text); background: var(--info-soft); border-radius: 6px; padding: 6px 8px; margin: 4px 0; }
+.info-tip.open { display: block; }
