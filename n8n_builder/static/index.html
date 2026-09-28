@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>N8N Export Builder</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/app.css">
+  <script type="module" src="/static/app.js"></script>
+</head>
+<body>
+  <div class="shell">
+    <nav class="side" aria-label="Navigation">
+      <div class="brand"><span class="logo" aria-hidden="true"></span><div><b>N8N Export Builder</b><small>Workflows déterministes</small></div></div>
+      <a href="#atelier" data-page="atelier">Atelier</a>
+      <a href="#modeles" data-page="modeles">Modèles LLM</a>
+      <a href="#n8n" data-page="n8n">Instances n8n</a>
+      <a href="#guide" data-page="guide">Guide</a>
+      <div class="side-foot" id="side-foot"></div>
+    </nav>
+    <main id="main" tabindex="-1"></main>
+  </div>
+  <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+  <dialog id="dialog"></dialog>
+  <noscript>N8N Export Builder nécessite JavaScript.</noscript>
+</body>
+</html>
