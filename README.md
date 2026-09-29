@@ -11,6 +11,7 @@ Conçu pour le [Hub d'agents](https://github.com/jeannicolasdavid1979/hub-d-agen
 | Espace | Pour qui | Rôle |
 |---|---|---|
 | **Labo Jev** | novice comme pro | Un automate en cases à remplir. L'IA remplit chaque case et explique son choix (« Pourquoi ? ») ; vous ajustez ce que vous voulez, la case passe « Réglé par vous » et l'IA ne la touche plus. Essai direct, banc d'essai, calibrage automatique des seuils sur vos cas |
+| **Vue graphique** | novice | Chaque labo bascule en voie ferrée : gare, ateliers, cabine de l'aiguilleur (Jev et ses jauges), aiguillage, voies colorées. Une carte par module, une console de test où le wagon roule jusqu'à sa voie ; dans le Labo Jev, bouger un seuil rejoue la décision sans rappeler Jev |
 | **Plusieurs LLM** | tous | Dans un même automate : un LLM agentique en entrée (par exemple xiaomi/mimo-v2.6-flash via OpenRouter) qui met la demande au propre, Jev qui décide, et un LLM différent par route pour rédiger. Chaque case choisit son fournisseur et son modèle |
 | **Labo n8n** | pro | Tous les réglages du générateur : préparation en JavaScript, règles sur les probabilités brutes, score composite, sources RSS ou HTTP, LLM de secours sur une route. Bibliothèque de modèles |
 | **Modèles LLM** | tous | OpenRouter en tête, puis Ollama Cloud, Ollama local, TypeSafe Jev, Anthropic, OpenAI, Gemini, Mistral, DeepSeek, Groq, xAI, Together, Cerebras. Listes de modèles lues en direct (prix et contexte pour OpenRouter). Clés chiffrées, jamais renvoyées à l'interface |

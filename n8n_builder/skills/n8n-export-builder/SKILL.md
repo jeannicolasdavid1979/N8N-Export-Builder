@@ -15,6 +15,7 @@ Outil qui fabrique des **automates déterministes** : un workflow n8n où Jev ju
 - **Modèles LLM** : clés chiffrées et modèles lus en direct (OpenRouter en tête, Ollama, Jev…).
 - **Instances n8n** : n8n local, VPS ou Cloud.
 - **Banque de skills** : ces fichiers, à donner aux agents.
+- **Vue graphique** (bouton dans les deux labos) : l'automate en voie ferrée. Gare (entrée), ateliers (préparation, LLM d'entrée), cabine de l'aiguilleur (Jev, une jauge par question), aiguillage (règles), voies colorées vers chaque route (verte automatique, orange humain, rouge blocage). Une carte par module, et une console de test où le wagon roule jusqu'à sa voie.
 
 ## Chaîne d'un automate
 

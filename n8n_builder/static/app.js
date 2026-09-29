@@ -150,7 +150,17 @@ const rebuild = debounce(async () => {
     S.errors = e.errors || [e.message];
   }
   renderPreview();
+  nGraph();
 }, 350);
+function nGraph() {
+  const host = document.getElementById('ngraph');
+  if (!host || S.view !== 'graph') return;
+  if (!S.scene || S.scene.forSpec !== S.spec) S.scene = { st: {}, forSpec: S.spec };
+  Object.assign(S.scene, { host, build: S.errors ? null : S.build, redraw: () => renderScene(S.scene) });
+  sceneReplay(S.scene);
+  renderScene(S.scene);
+}
+
 function changed(structural = false) { S.test = null; if (structural) renderEditor(); rebuild(); }
 
 async function renderAtelier(main) {
@@ -166,11 +176,13 @@ async function renderAtelier(main) {
       h('div', {}, h('h1', { text: 'Labo n8n' }),
         h('p', { class: 'muted', text: "L'IA conçoit une fois, le code et Jev exécutent mille fois : mêmes entrées, même décision." })),
       h('div', { class: 'row' },
+        viewToggle(S.view || 'form', v => { S.view = v; renderAtelier($('#main')); }),
         h('button', { onclick: saveSpec, text: 'Enregistrer' }),
         h('button', { onclick: () => S.build && download(slug(S.spec.name) + '.json', S.build.workflow), text: 'Télécharger le JSON' }),
         h('button', { onclick: () => S.build && openHubExport({ spec: S.spec }), text: 'Exporter vers le Hub' }),
         h('button', { class: 'primary', onclick: () => openPush(), text: 'Envoyer vers n8n' }))),
-    h('div', { class: 'workbench' },
+    h('div', { id: 'ngraph' }),
+    h('div', { class: 'workbench', style: S.view === 'graph' ? 'display:none' : null },
       h('aside', { class: 'library', id: 'library' }),
       h('section', { id: 'editor' }),
       h('aside', { class: 'preview', id: 'preview' })));
@@ -967,6 +979,7 @@ const jRecompile = debounce(async () => {
   } catch (e) { J.errors = e.errors || [e.message]; }
   renderJevSide();
   refreshRuleSelects();
+  jGraph();
 }, 400);
 function jChanged(structural = false) { J.essai = null; if (structural) renderJevEditor(); jRecompile(); }
 
@@ -1003,12 +1016,12 @@ function jAssist() {
 
 async function loadFicheType(fid) {
   const f = await api('GET', `/api/jevlab/fiches/${fid}`);
-  J.fiche = f.fiche; J.fid = fid; J.savedId = null; J.bench = null; J.calib = null; J.essai = null;
+  J.fiche = f.fiche; J.fid = fid; J.savedId = null; J.bench = null; J.calib = null; J.essai = null; J.scene = null;
   renderJevLab($('#main'));
 }
 async function loadSavedFiche(id) {
   const f = await api('GET', `/api/jevlab/saved/${id}`);
-  J.fiche = f.fiche; J.savedId = id; J.fid = null; J.bench = null; J.calib = null; J.essai = null;
+  J.fiche = f.fiche; J.savedId = id; J.fid = null; J.bench = null; J.calib = null; J.essai = null; J.scene = null;
   renderJevLab($('#main'));
 }
 
@@ -1020,13 +1033,35 @@ async function renderJevLab(main) {
       h('div', {}, h('h1', { text: 'Labo Jev' }),
         h('p', { class: 'muted', text: 'Réglez un automate de décision case par case. L\'IA propose et explique, vous ajustez, le banc d\'essai vérifie. À l\'exécution, aucun LLM : Jev et des règles.' })),
       h('div', { class: 'row' },
+        viewToggle(J.view || 'form', v => { J.view = v; renderJevLab($('#main')); }),
         h('button', { text: 'Enregistrer', onclick: saveFiche }),
         h('button', { text: 'Ouvrir dans le Labo n8n', title: 'Mode expert : la même logique, tous les réglages', onclick: openInN8nLab }),
         h('button', { text: 'Exporter vers le Hub', onclick: () => openHubExport({ fiche: J.fiche }) }),
         h('button', { class: 'primary', text: 'Envoyer vers n8n', onclick: () => openPush(jevPushCtx()) }))),
-    h('div', { class: 'workbench' },
-      h('aside', { class: 'library', id: 'jlib' }), h('section', { id: 'jed' }), h('aside', { class: 'preview', id: 'jside' })));
+    h('div', { class: 'workbench', style: J.view === 'graph' ? 'display:none' : null },
+      h('aside', { class: 'library', id: 'jlib' }), h('section', { id: 'jed' }), h('aside', { class: 'preview', id: 'jside' })),
+    h('div', { id: 'jgraph' }));
   renderJevLibrary(); renderJevEditor(); jRecompile();
+}
+
+function jGraph() {
+  const host = document.getElementById('jgraph');
+  if (!host || J.view !== 'graph') return;
+  J.scene = J.scene || { st: {} };
+  Object.assign(J.scene, {
+    host, build: J.errors ? null : J.compiled,
+    notes: Object.fromEntries((J.fiche.resultats || []).map(r => [r.id, (r.label ? r.label + ' : ' : '') + (r.consigne || '')])),
+    onThreshold: (qid, key, val) => {
+      const q = J.fiche.questions.find(x => x.id === qid);
+      if (!q) return;
+      q[key] = val;
+      if (q.seuil_non > q.seuil_oui) { if (key === 'seuil_non') q.seuil_oui = val; else q.seuil_non = val; }
+      touch(`questions.${qid}.seuils`);
+    },
+    redraw: () => renderScene(J.scene),
+  });
+  sceneReplay(J.scene);
+  renderScene(J.scene);
 }
 
 function jevPushCtx() {
@@ -1687,6 +1722,350 @@ async function renderSkills(main) {
         h('a', { class: 'btn small', href: '/api/skills/' + sk.name, download: sk.name + '-SKILL.md', text: 'Télécharger' }))));
   }
   put(main, list, h('div', { class: 'card', style: 'margin-top:14px' }, h('h2', { text: 'Contenu' }), view));
+}
+
+// Vue graphique : l'automate en voie ferrée ---------------------------------------------------------------
+// Gare (entrée) → wagon (message) → ateliers (préparation, LLM d'entrée) → cabine de l'aiguilleur (Jev)
+// → aiguillage (règles) → voies colorées vers chaque route. Construite depuis le workflow réellement généré.
+
+const SVGNS = 'http://www.w3.org/2000/svg';
+function sv(tag, attrs, ...kids) {
+  const el = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) if (v !== null && v !== undefined) el.setAttribute(k, v);
+  for (const k of kids.flat()) if (k !== null && k !== undefined) el.append(k instanceof Node ? k : document.createTextNode(String(k)));
+  return el;
+}
+
+const REVIEW_RE = /revoir|relire|humain|verifier|examiner|agent_decide|desaccord|valider|incertain|responsable|analyste|astreinte|appeler|telephone/;
+const BLOCK_RE = /bloqu|refus|signal|rejet|spam|fraude|invent|incoher|invalide|masquer|hors_|doublon|critique|en_retard/;
+function routeKind(r) { return BLOCK_RE.test(r) ? 'block' : (REVIEW_RE.test(r) ? 'review' : 'auto'); }
+const KIND_LABEL = { auto: 'Automatique', review: 'Humain', block: 'Blocage' };
+
+function sceneModules(build) {
+  const spec = build.spec;
+  const names = new Set(build.workflow.nodes.map(n => n.name));
+  const t = spec.trigger;
+  const mods = [{ id: 'gare', icon: '🚉', label: 'Gare de départ', sub: { webhook: 'Webhook /' + t.path, schedule: 'Planifié', manual: 'Manuel' }[t.type] }];
+  if (spec.source) mods.push({ id: 'source', icon: '📡', label: 'Source', sub: spec.source.type.toUpperCase() });
+  mods.push({ id: 'prep', icon: '🛠', label: 'Atelier de préparation', sub: 'code' });
+  if (spec.entree_llm) mods.push({ id: 'llm_in', icon: '✍', label: 'LLM d\'entrée', sub: spec.entree_llm.model });
+  if (build.uses_jev) mods.push({ id: 'jev', icon: '🧠', label: 'Cabine de l\'aiguilleur', sub: 'Jev ' + spec.model });
+  mods.push({ id: 'decision', icon: '🔀', label: 'Aiguillage', sub: `${(spec.decision.rules || []).length} règle(s)` });
+  return mods.filter(m => m.id !== 'llm_in' || names.has("LLM d'entrée (agent)"));
+}
+
+// Jauge circulaire : valeur 0..1, couleur selon le verdict
+function gauge(label, value, verdict, sub) {
+  const r = 30, c = 2 * Math.PI * r, v = value === null || value === undefined ? null : Math.max(0, Math.min(1, value));
+  const tone = verdict === 'oui' ? 'var(--g-ok)' : verdict === 'non' ? 'var(--g-no)' : (verdict === 'a_verifier' || verdict === 'incertain' || verdict === 'hesitation') ? 'var(--g-mid)' : 'var(--g-acc)';
+  const arc = sv('circle', { cx: 40, cy: 40, r, fill: 'none', stroke: tone, 'stroke-width': 8, 'stroke-linecap': 'round',
+    'stroke-dasharray': `${v === null ? 0 : c * v} ${c}`, transform: 'rotate(-90 40 40)', class: 'g-arc' });
+  return h('div', { class: 'gauge' },
+    h('div', { class: 'g-label', text: label }),
+    (() => { const s = sv('svg', { viewBox: '0 0 80 80', width: 80, height: 80 },
+      sv('circle', { cx: 40, cy: 40, r, fill: 'none', stroke: 'var(--g-track)', 'stroke-width': 8 }), arc,
+      sv('text', { x: 40, y: 45, 'text-anchor': 'middle', class: 'g-val' }, v === null ? '?' : Math.round(v * 100) + '%')); return s; })(),
+    h('div', { class: 'g-sub', text: verdict ? String(Array.isArray(verdict) ? verdict.join(', ') || 'aucune' : verdict) : (sub || 'en attente') }));
+}
+
+function sceneGauges(ctx) {
+  const res = ctx.st.result;
+  const answers = (res && res.jev && res.jev.answers) || {};
+  const vars = (res && res.decision && res.decision.vars) || {};
+  const qs = Object.entries((res && res.prep && res.prep.questions) || ctx.build.spec.questions || {});
+  const out = [];
+  for (const [id, q] of qs.slice(0, 8)) {
+    const a = answers[id];
+    const base = id.split('__')[0];
+    let val = null, verdict = vars[id + '_verdict'] ?? vars[base + '_verdict'];
+    if (a) val = a.type === 'noul' ? a.noul : (a.type === 'choice' ? a.confidence : (a.score / Math.max(1, (q.criteria || []).length - 1)));
+    if (a && a.type === 'noul' && id.includes('__')) verdict = a.noul >= 0.5 ? 'oui' : 'non';
+    out.push(gauge(id.replace('__', ' · '), val, a ? verdict : null, { noul: 'oui / non', choice: 'choix', score: 'score' }[q.type]));
+  }
+  if (qs.length > 8) out.push(h('div', { class: 'g-more', text: `+ ${qs.length - 8} question(s)` }));
+  if (!qs.length) out.push(h('div', { class: 'g-more', text: ctx.build.uses_jev ? 'Questions construites depuis l\'entrée : lancez le test.' : 'Automate 100 % code : pas de question à Jev.' }));
+  return h('div', { class: 'gauges' }, h('div', { class: 'g-title' }, 'Jauges de l\'aiguilleur ', info('Une jauge par question posée à Jev. Oui/non : probabilité du oui. Choix : confiance dans le mot retenu. Score : position sur l\'échelle. La couleur suit le verdict : vert oui, rouge non, orange à vérifier.')), h('div', { class: 'g-row' }, out));
+}
+
+function sceneSvg(ctx) {
+  const build = ctx.build, spec = build.spec;
+  const mods = sceneModules(build);
+  const routes = build.routes;
+  const W = 1000, H = Math.max(380, 96 * routes.length + 70), mid = H / 2 + 20;
+  const xSwitch = 640, xEnd = 820;
+  const step = (xSwitch - 150) / Math.max(1, mods.length - 1);
+  const pos = mods.map((m, i) => ({ ...m, x: 80 + i * step, y: mid }));
+  const svg = sv('svg', { viewBox: `0 0 ${W} ${H}`, class: 'scene-svg', role: 'img', 'aria-label': 'Schéma du workflow en voie ferrée' });
+  const defs = sv('defs', {}, sv('filter', { id: 'glow' }, sv('feGaussianBlur', { stdDeviation: 4, result: 'b' }), sv('feMerge', {}, sv('feMergeNode', { in: 'b' }), sv('feMergeNode', { in: 'SourceGraphic' }))));
+  svg.append(defs);
+  const res = ctx.st.result;
+  const hit = res && res.decision && res.decision.route;
+  // voie principale
+  const main = `M 40 ${mid} L ${xSwitch} ${mid}`;
+  svg.append(sv('path', { d: main, class: 'rail-bed' }), sv('path', { d: main, class: 'rail-ties' }), sv('path', { d: main, id: 'rail-main', class: 'rail-line' }));
+  // voies de sortie
+  const top = mid - (routes.length - 1) * 96 / 2;
+  const llms = new Set((spec.llms || []).map(l => l.route));
+  routes.forEach((r, i) => {
+    const y = top + i * 96;
+    const kind = routeKind(r);
+    const d = `M ${xSwitch} ${mid} C ${xSwitch + 120} ${mid}, ${xSwitch + 110} ${y}, ${xEnd - 40} ${y} L ${xEnd} ${y}`;
+    const cls = `rail-out k-${kind}` + (hit ? (hit === r ? ' hit' : ' dim') : '');
+    svg.append(sv('path', { d, class: 'rail-bed ' + cls }), sv('path', { d, class: 'rail-ties ' + cls }), sv('path', { d, id: 'rail-r-' + i, class: 'rail-line ' + cls }));
+    const g = sv('g', { class: 'station dest ' + cls, tabindex: 0, 'data-mod': 'route:' + r });
+    g.append(sv('rect', { x: xEnd, y: y - 30, width: 170, height: 60, rx: 10 }),
+      sv('text', { x: xEnd + 85, y: y - 5, 'text-anchor': 'middle', class: 'st-t' }, r.length > 17 ? r.slice(0, 16) + '…' : r),
+      sv('text', { x: xEnd + 85, y: y + 16, 'text-anchor': 'middle', class: 'st-s' }, KIND_LABEL[kind] + (llms.has(r) ? ' · LLM' : '') + (spec.decision.error_route === r ? ' · panne' : '')));
+    g.addEventListener('click', () => { ctx.st.sel = 'route:' + r; ctx.redraw(); });
+    svg.append(g);
+  });
+  // stations de la voie principale
+  pos.forEach(m => {
+    const big = m.id === 'jev';
+    const w = Math.max(big ? 150 : 112, Math.min(step - 12, m.label.length * 8.2 + 22)), hh = big ? 104 : 84;
+    const g = sv('g', { class: 'station' + (big ? ' cabin' : '') + (ctx.st.sel === m.id ? ' sel' : '') + (res ? ' passed' : ''), tabindex: 0, 'data-mod': m.id });
+    g.append(sv('rect', { x: m.x - w / 2, y: m.y - hh - 18, width: w, height: hh, rx: 12 }),
+      sv('text', { x: m.x, y: m.y - hh + (big ? 20 : 14), 'text-anchor': 'middle', class: 'st-i' }, m.icon),
+      sv('text', { x: m.x, y: m.y - (big ? 46 : 40), 'text-anchor': 'middle', class: 'st-t' }, m.label.length > 20 ? m.label.split(' ').slice(0, 2).join(' ') : m.label),
+      sv('text', { x: m.x, y: m.y - (big ? 28 : 24), 'text-anchor': 'middle', class: 'st-s' }, String(m.sub || '').slice(0, 20)),
+      sv('circle', { cx: m.x, cy: m.y, r: 7, class: 'st-dot' }));
+    g.addEventListener('click', () => { ctx.st.sel = m.id; ctx.redraw(); });
+    svg.append(g);
+  });
+  // aiguillage
+  svg.append(sv('circle', { cx: xSwitch, cy: mid, r: 11, class: 'switch-dot' + (hit ? ' on' : '') }));
+  // wagon
+  const wagon = sv('g', { id: 'wagon', class: 'wagon', transform: `translate(40 ${mid})` },
+    sv('rect', { x: -24, y: -30, width: 48, height: 24, rx: 5 }), sv('text', { x: 0, y: -13, 'text-anchor': 'middle' }, '✉'),
+    sv('circle', { cx: -13, cy: -4, r: 4 }), sv('circle', { cx: 13, cy: -4, r: 4 }));
+  svg.append(wagon);
+  return svg;
+}
+
+async function animateWagon(host, routeIndex) {
+  const svg = host.querySelector('.scene-svg');
+  if (!svg) return;
+  const wagon = svg.querySelector('#wagon');
+  const legs = [svg.querySelector('#rail-main'), routeIndex >= 0 ? svg.querySelector('#rail-r-' + routeIndex) : null].filter(Boolean);
+  const stations = [...svg.querySelectorAll('.station:not(.dest)')];
+  for (const [li, path] of legs.entries()) {
+    const len = path.getTotalLength();
+    const dur = li === 0 ? 1800 : 1100;
+    await new Promise(done => {
+      const t0 = performance.now();
+      const tick = now => {
+        const k = Math.min(1, (now - t0) / dur);
+        const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+        const p = path.getPointAtLength(e * len);
+        wagon.setAttribute('transform', `translate(${p.x} ${p.y})`);
+        if (li === 0) stations.forEach(s => { const c = s.querySelector('.st-dot'); if (c && Number(c.getAttribute('cx')) <= p.x + 2) s.classList.add('lit'); });
+        if (k < 1) requestAnimationFrame(tick); else done();
+      };
+      requestAnimationFrame(tick);
+    });
+  }
+  svg.querySelectorAll('.station.dest.hit').forEach(s => s.classList.add('arrived'));
+}
+
+// Carte détaillée du module choisi
+function moduleCard(ctx) {
+  const { build, st } = ctx;
+  const spec = build.spec, res = st.result;
+  const sel = st.sel || (build.uses_jev ? 'jev' : 'decision');
+  const card = h('div', { class: 'mod-card stack' });
+  const title = (t, tip) => h('h2', {}, t, ' ', tip ? info(tip) : null);
+  if (sel === 'gare') {
+    const t = spec.trigger;
+    put(card, title('🚉 Gare de départ', 'Là où le message entre dans l\'automate : un appel HTTP (webhook), une horloge (planifié) ou un clic (manuel).'),
+      h('p', {}, { webhook: `Un agent ou un service envoie un message en POST à /webhook/${t.path}.`, schedule: 'L\'automate part tout seul, à heure fixe.', manual: 'Vous lancez l\'automate à la main, avec l\'exemple.' }[t.type]),
+      t.type === 'webhook' ? h('div', { class: 'notice ' + (t.auth === 'header' ? 'ok' : 'warn') + ' small', text: t.auth === 'header' ? '🔒 Protégé : il faut la clé X-Builder-Key pour entrer.' : '🔓 Ouvert : n\'importe qui peut envoyer un message. Activez la clé avant la production.' }) : null,
+      h('label', { text: 'Wagon d\'exemple (ce qui arrive en gare)' }), h('pre', { class: 'json', text: JSON.stringify(st.inputObj ?? spec.sample, null, 2) }));
+  } else if (sel === 'source') {
+    put(card, title('📡 Source', 'L\'automate va chercher lui-même les données (flux RSS, adresse web), un wagon par élément.'), h('p', { class: 'mono small', text: spec.source.url }));
+  } else if (sel === 'prep') {
+    put(card, title('🛠 Atelier de préparation', 'Du code, sans IA : il calcule ce qui se calcule (dates, montants, doublons) et prépare le texte envoyé à Jev. Même entrée, même résultat.'),
+      h('p', { class: 'small muted', text: { field: `Jev lira le champ « ${spec.state.field} ».`, fields: `Jev lira les champs ${(spec.state.fields || []).join(', ')}.`, json: 'Jev lira tout l\'objet reçu.' }[spec.state.mode] }),
+      spec.prepare_js ? h('p', { class: 'small', text: 'Calculs propres à ce workflow : ' + ((spec.prepare_js.match(/vars\.([a-z_]+)\s*=/g) || []).map(x => x.slice(5, -1).trim()).filter((v, i, a) => a.indexOf(v) === i).join(', ') || 'questions construites depuis l\'entrée') }) : h('p', { class: 'small faint', text: 'Pas de calcul particulier.' }),
+      res ? h('div', {}, h('label', { text: 'Ce que l\'atelier a produit' }), h('pre', { class: 'json', text: JSON.stringify({ etat_envoye_a_jev: res.prep.state, variables: res.prep.vars }, null, 2) })) : null);
+  } else if (sel === 'llm_in') {
+    const l = spec.entree_llm;
+    put(card, title('✍ LLM d\'entrée (agentique)', 'Un LLM relit la demande brute et la réécrit en texte clair avant Jev. Sa réponse devient l\'état jugé par Jev.'),
+      h('p', {}, h('b', { text: l.model }), ' · ', l.provider), h('p', { class: 'small muted', text: l.system }),
+      h('div', { class: 'notice info small', text: 'Dans le test du builder, ce LLM n\'est pas appelé : Jev juge l\'état brut. Dans n8n, il est appelé à chaque passage.' }));
+  } else if (sel === 'jev') {
+    put(card, title('🧠 Cabine de l\'aiguilleur (Jev)', 'Jev ne rédige rien : il répond à chaque question par une probabilité. Toutes les questions partent en un seul appel.'));
+    const answers = (res && res.jev && res.jev.answers) || null;
+    for (const [id, q] of Object.entries((res && res.prep.questions) || spec.questions).slice(0, 12)) {
+      const a = answers && answers[id];
+      const v = ((spec.decision.verdicts || {})[id]) || ((spec.decision.verdicts || {})[id.split('__')[0]]) || null;
+      const block = h('div', { class: 'qcard stack' }, h('div', { class: 'row between' }, h('b', { class: 'mono', text: id }), h('span', { class: 'badge', text: q.type })),
+        h('div', { class: 'small', text: typeof q.instructions === 'string' ? q.instructions : (q.instructions.question || JSON.stringify(q.instructions)).slice(0, 180) }));
+      if (q.type === 'noul' && v && v.kind === 'noul') put(block, bandBar(Math.round(v.non * 100), Math.round(v.oui * 100), a ? a.noul : undefined));
+      if (a) put(block, h('div', { class: 'small faint', text: a.type === 'noul' ? `Probabilité du oui : ${Math.round(a.noul * 100)} %` : a.type === 'choice' ? `Choix : ${String(q.criteria[a.choice] && /^c\d+$/.test(a.choice) ? q.criteria[a.choice] : a.choice).slice(0, 60)} · confiance ${Math.round(a.confidence * 100)} %` : `Score ${fmtNum(a.score, 2)} sur ${(q.criteria || []).length - 1}` }));
+      if (ctx.onThreshold && q.type === 'noul' && v && v.kind === 'noul' && !id.includes('__')) {
+        put(block, h('div', { class: 'row' },
+          pctInput(Math.round(v.non * 100), x => ctx.onThreshold(id, 'seuil_non', x), 'NON jusqu\'à'),
+          pctInput(Math.round(v.oui * 100), x => ctx.onThreshold(id, 'seuil_oui', x), 'OUI dès')));
+      }
+      if (st.simAnswers && st.simAnswers[id]) {
+        const sa = st.simAnswers[id];
+        let ctl;
+        if (sa.type === 'noul') ctl = h('input', { type: 'range', min: 0, max: 1, step: 0.01, value: sa.noul, oninput: e => { sa.noul = Number(e.target.value); } });
+        else if (sa.type === 'choice') ctl = selectEl(Object.entries(q.criteria).map(([k, d]) => [k, /^c\d+$/.test(k) && typeof d === 'string' ? d.slice(0, 50) : k]), sa.choice, x => { sa.choice = x; sa.probabilities = { [x]: sa.confidence }; });
+        else ctl = h('input', { type: 'number', step: 0.1, min: 0, max: (q.criteria || []).length - 1, value: sa.score, oninput: e => { sa.score = Number(e.target.value); } });
+        put(block, h('div', { class: 'sim' }, h('span', { class: 'small', text: 'Simulation : ' }), ctl));
+      }
+      put(card, block);
+    }
+  } else if (sel === 'decision') {
+    const hitReason = res && res.decision.reason;
+    put(card, title('🔀 Aiguillage', 'Des règles écrites, lues dans l\'ordre : la première qui s\'applique choisit la voie. Aucune IA ici, c\'est ce qui rend la décision identique à chaque passage.'));
+    const rules = spec.decision.rules || [];
+    if (spec.decision.mode === 'choice') put(card, h('p', {}, `Voie = mot choisi par Jev pour « ${spec.decision.question} », si sa confiance atteint ${Math.round(spec.decision.min_confidence * 100)} %. Sinon : ${spec.decision.review_route}.`));
+    rules.forEach((r, i) => {
+      const label = r.label || r.when.map(c => `${c.field} ${c.op} ${c.value ?? ''}`).join(' et ');
+      const on = hitReason && (hitReason === r.label || hitReason.startsWith(r.when.map(c => `${c.field} ${c.op}`)[0]));
+      put(card, h('div', { class: 'signal' + (on ? ' on' : '') }, h('span', { class: 'lamp k-' + routeKind(r.route.startsWith('=') ? 'auto' : r.route) }), h('span', { class: 'small', text: `${i + 1}. ${label}` }), h('b', { class: 'mono small', text: ' → ' + r.route })));
+    });
+    put(card, h('div', { class: 'signal' }, h('span', { class: 'lamp' }), h('span', { class: 'small', text: 'Sinon' }), h('b', { class: 'mono small', text: ' → ' + (spec.decision.default_route || spec.decision.review_route || '') })),
+      h('div', { class: 'notice warn small', text: `Si Jev ne répond pas : voie « ${spec.decision.error_route} ».` }));
+    if (res) put(card, h('div', { class: 'notice ok small' }, 'Règle appliquée : ', h('b', { text: res.decision.reason })));
+  } else if (sel.startsWith('route:')) {
+    const r = sel.slice(6), kind = routeKind(r);
+    const l = (spec.llms || []).find(x => x.route === r);
+    put(card, title(`🏁 Voie « ${r} »`, 'Une destination de l\'automate. Dans n8n, un nœud « Route : ' + r + ' » attend vos actions ; dans le Hub, l\'agent lit la consigne de cette voie.'),
+      h('span', { class: 'badge k-' + kind, text: KIND_LABEL[kind] }),
+      h('p', { text: (spec.route_notes || {})[r] || (ctx.notes || {})[r] || 'Consigne de l\'agent à préciser pour cette voie.' }),
+      l ? h('div', { class: 'notice info small' }, '✍ Un LLM rédige sur cette voie : ', h('b', { text: l.model })) : h('p', { class: 'small faint', text: 'Pas de LLM sur cette voie : aucun coût de rédaction.' }),
+      spec.decision.error_route === r ? h('div', { class: 'notice warn small', text: 'Voie de secours : c\'est ici qu\'arrive un message si Jev ne répond pas.' }) : null);
+  }
+  return card;
+}
+
+function sceneConsole(ctx) {
+  const { st } = ctx;
+  const jevReady = (provider('typesafe') || {}).configured;
+  const input = textArea(st.inputText ?? JSON.stringify(ctx.build.spec.sample && !Array.isArray(ctx.build.spec.sample) ? ctx.build.spec.sample : (ctx.build.spec.sample || [])[0] || {}, null, 2), v => { st.inputText = v; }, { class: 'code', rows: 6 });
+  const log = h('div', { class: 'trace' }, (st.trace || ['En attente d\'un wagon.']).map(l => h('div', { text: l })));
+  const out = h('pre', { class: 'json', text: st.result ? JSON.stringify({ route: st.result.decision.route, raison: st.result.decision.reason, variables: st.result.decision.vars, extra: st.result.decision.extra, jev_modele: st.result.jev && st.result.jev.model }, null, 2) : '{ }' });
+  return h('div', { class: 'console card' },
+    h('div', { class: 'row between' }, h('h2', { style: 'margin:0' }, 'Console de test ', info('Écrivez un message, lancez : le wagon part de la gare, passe la cabine de Jev et prend la voie choisie. La trace raconte chaque étape ; la sortie JSON est exactement ce que l\'agent recevra.')),
+      h('div', { class: 'row' },
+        h('button', { class: 'primary', disabled: !jevReady || !ctx.build, title: jevReady ? '' : 'Clé TypeSafe à renseigner dans Modèles LLM', text: '▶ Lancer avec Jev', onclick: () => sceneRun(ctx, false) }),
+        h('button', { text: '▶ Lancer en simulation', title: 'Sans clé : les réponses de Jev viennent des curseurs de la cabine', onclick: () => sceneRun(ctx, true) }))),
+    h('div', { class: 'console-grid' },
+      h('div', {}, h('label', { text: 'Entrée (le wagon)' }), input),
+      h('div', {}, h('label', { text: 'Trace' }), log),
+      h('div', {}, h('label', { text: 'Sortie JSON (ce que reçoit l\'agent)' }), out)));
+}
+
+function toInput(ctx, text) {
+  const spec = ctx.build.spec;
+  const t = String(text ?? '').trim();
+  if (t.startsWith('{') || t.startsWith('[')) { try { const v = JSON.parse(t); return Array.isArray(v) ? v[0] : v; } catch { /* texte */ } }
+  return { [spec.state.mode === 'field' ? spec.state.field : ((spec.state.fields || [])[0] || 'message')]: text };
+}
+
+async function sceneRun(ctx, simulate) {
+  const { st, build } = ctx;
+  const spec = build.spec;
+  const input = toInput(ctx, st.inputText ?? JSON.stringify(spec.sample && !Array.isArray(spec.sample) ? spec.sample : (spec.sample || [])[0] || {}));
+  st.inputObj = input;
+  const code = name => (build.workflow.nodes.find(n => n.name === name) || {}).parameters.jsCode;
+  const trace = [];
+  const refs = {};
+  try {
+    const items = spec.trigger.type === 'webhook' ? [{ json: { body: input } }] : [{ json: input }];
+    trace.push(`🚉 Wagon reçu en gare (${spec.trigger.type === 'webhook' ? 'webhook /' + spec.trigger.path : spec.trigger.type}).`);
+    const prep = runCode(code(NODE_PREP), items, refs, {});
+    refs[NODE_PREP] = prep;
+    const p = prep[0].json;
+    const calc = Object.keys(p.vars || {}).filter(k => !k.startsWith('__'));
+    trace.push(`🛠 Atelier : ${calc.length ? calc.length + ' valeur(s) calculée(s) (' + calc.slice(0, 4).join(', ') + ')' : 'rien à calculer'}.`);
+    if (spec.entree_llm) trace.push(`✍ LLM d'entrée (${spec.entree_llm.model}) : non appelé en test, état brut conservé.`);
+    let res = null;
+    if (build.uses_jev) {
+      const qids = Object.keys(p.questions);
+      if (simulate) {
+        st.simAnswers = st.simAnswers && Object.keys(st.simAnswers).join() === qids.join() ? st.simAnswers : defaultAnswers(p.questions);
+        res = { model: 'simulation', answers: clone(st.simAnswers) };
+        trace.push(`🧠 Cabine : ${qids.length} question(s), réponses simulées (réglables dans la carte de la cabine).`);
+      } else if (!qids.length) {
+        res = { model: 'aucune question', answers: {} };
+        trace.push('🧠 Cabine : aucune question pour cette entrée.');
+      } else {
+        const t0 = performance.now();
+        res = await api('POST', '/api/jev/ask', { state: p.state, questions: p.questions, model: spec.model });
+        trace.push(`🧠 Cabine : ${qids.length} question(s) en 1 appel · ${res.usage ? res.usage.input_tokens + ' tokens · ' + (res.usage.input_tokens * JEV_PRICE_PER_TOKEN).toFixed(6).replace('.', ',') + ' $ · ' : ''}${Math.round(performance.now() - t0)} ms.`);
+      }
+      for (const [id, a] of Object.entries(res.answers).slice(0, 8)) {
+        trace.push(`   • ${id} : ` + (a.type === 'noul' ? `${Math.round(a.noul * 100)} % de oui` : a.type === 'choice' ? `« ${String(/^c\d+$/.test(a.choice) ? (p.questions[id].criteria[a.choice] || a.choice) : a.choice).slice(0, 40)} » à ${Math.round(a.confidence * 100)} %` : `score ${fmtNum(a.score, 2)}`));
+      }
+    }
+    const dec = runCode(code(NODE_DECIDE), build.uses_jev ? [{ json: res }] : prep, refs, {})[0].json;
+    trace.push(`🔀 Aiguillage : ${dec.reason}.`);
+    const l = (spec.llms || []).find(x => x.route === dec.route);
+    trace.push(`🏁 Arrivée voie « ${dec.route} » (${KIND_LABEL[routeKind(dec.route)]})${l ? ' · un LLM ' + l.model + ' y rédigera la réponse' : ''}.`);
+    st.result = { prep: p, jev: res || { answers: {} }, decision: dec };
+    st.trace = trace;
+    st.sel = st.sel || 'jev';
+  } catch (e) {
+    trace.push('⚠ ' + e.message);
+    trace.push(`En production, le wagon prendrait la voie de secours « ${spec.decision.error_route} ».`);
+    st.trace = trace; st.result = null;
+  }
+  st.lastJev = st.result ? st.result.jev : null;
+  st.animating = true;
+  ctx.redraw();
+  const idx = st.result ? build.routes.indexOf(st.result.decision.route) : -1;
+  await animateWagon(ctx.host, idx);
+  st.animating = false;
+}
+
+// Rejoue la décision sur le dernier wagon, avec les réponses de Jev déjà reçues : aucun nouvel appel.
+function sceneReplay(ctx) {
+  const { st, build } = ctx;
+  if (!st.result || !st.inputObj || !build) return;
+  try {
+    const code = name => (build.workflow.nodes.find(n => n.name === name) || {}).parameters.jsCode;
+    const refs = {};
+    const items = build.spec.trigger.type === 'webhook' ? [{ json: { body: st.inputObj } }] : [{ json: st.inputObj }];
+    const prep = runCode(code(NODE_PREP), items, refs, {});
+    refs[NODE_PREP] = prep;
+    const dec = runCode(code(NODE_DECIDE), build.uses_jev ? [{ json: st.lastJev }] : prep, refs, {})[0].json;
+    const before = st.result.decision.route;
+    st.result = { prep: prep[0].json, jev: st.lastJev || { answers: {} }, decision: dec };
+    st.trace = [...(st.trace || []).filter(l => !l.startsWith('↻')), `↻ Réglage modifié, décision rejouée sans nouvel appel : ${dec.reason} → voie « ${dec.route} »${before !== dec.route ? ' (avant : « ' + before + ' »)' : ''}.`];
+  } catch (e) { /* fiche en cours d'édition */ }
+}
+
+function renderScene(ctx) {
+  const host = clear(ctx.host);
+  if (!ctx.build) { put(host, h('div', { class: 'card empty', text: 'Complétez l\'automate : la vue graphique apparaîtra dès qu\'il est valide.' })); return; }
+  put(host,
+    tuto('graph', 'lire la voie ferrée', [
+      ['La ', h('b', { text: 'gare' }), ' reçoit le message (le ', h('b', { text: 'wagon' }), '). Les ', h('b', { text: 'ateliers' }), ' le préparent.'],
+      ['La ', h('b', { text: 'cabine de l\'aiguilleur' }), ' est Jev : il répond aux questions, les jauges montrent ses probabilités.'],
+      ['L\'', h('b', { text: 'aiguillage' }), ' applique vos règles et envoie le wagon sur une voie : ', h('span', { class: 'badge k-auto', text: 'verte, automatique' }), ' ', h('span', { class: 'badge k-review', text: 'orange, humain' }), ' ', h('span', { class: 'badge k-block', text: 'rouge, blocage' }), '.'],
+      ['Cliquez une station pour voir sa carte. Lancez un test en bas : le wagon roule et prend sa voie.'],
+    ]),
+    h('div', { class: 'scene' },
+      h('div', { class: 'scene-main' }, sceneGauges(ctx), h('div', { class: 'scene-track' }, sceneSvg(ctx))),
+      h('aside', { class: 'scene-side' }, moduleCard(ctx))),
+    sceneConsole(ctx));
+  const res = ctx.st.result;
+  if (res) {
+    const wagon = host.querySelector('#wagon');
+    const i = ctx.build.routes.indexOf(res.decision.route);
+    const path = host.querySelector('#rail-r-' + i);
+    if (wagon && path && !ctx.st.animating) { const pt = path.getPointAtLength(path.getTotalLength()); wagon.setAttribute('transform', `translate(${pt.x} ${pt.y})`); host.querySelectorAll('.station').forEach(s => s.classList.add('lit')); }
+  }
+}
+
+function viewToggle(current, onPick) {
+  return h('div', { class: 'seg', role: 'tablist' },
+    h('button', { class: current === 'form' ? 'on' : '', text: 'Formulaire', onclick: () => onPick('form') }),
+    h('button', { class: current === 'graph' ? 'on' : '', text: 'Vue graphique', onclick: () => onPick('graph') }));
 }
 
 // Démarrage -------------------------------------------------------------------------------------------
