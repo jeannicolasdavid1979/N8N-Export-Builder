@@ -21,7 +21,7 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, assist, economy, fiches, generator, hubexport, jev, jevlab, skills, templates
+from . import __version__, assist, economy, fiches, generator, hubexport, jev, jevlab, skills, synthese, templates
 from . import providers as P
 from .n8n_client import KINDS, N8nClient, N8nError, normalize_url
 from .spec import JEV_MODELS, JEV_PROVIDERS, JEV_URL, SpecError, question_vars, routes_of, uses_jev, validate
@@ -141,6 +141,7 @@ def create_app(data_dir: str | None = None, secret_key: str | None = None, passw
                 "jev_models": list(JEV_MODELS),
                 "jev_providers": {k: {kk: v[kk] for kk in ("label", "models", "default", "key")} for k, v in JEV_PROVIDERS.items()},
                 "fiches": fiches.catalog(),
+                "qcm_leviers": {"questions": synthese.QCM, "leviers": synthese.LEVIERS},
                 "mes_fiches": [{"id": f["id"], "name": f["fiche"].get("name"), "updated": f["updated"]} for f in store.fiches()]}
 
     def provider_or_404(pid: str) -> P.Provider:
@@ -314,6 +315,18 @@ def create_app(data_dir: str | None = None, secret_key: str | None = None, passw
         pid, p, model = assistant_model(body)
         return await jevlab.llm_field(pid, store.provider_key(pid), model, body.get("fiche") or {}, str(body.get("path") or ""),
                                       body.get("consigne") or "", store.provider(pid).get("base_url") if p.base_editable else None)
+
+    @app.post("/api/jevlab/synthese")
+    async def jev_synthese(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        pid, p, model = assistant_model(body)
+        if not isinstance(body.get("dossier"), dict):
+            raise HTTPException(400, "Faites passer les wagons d'essai avant de demander une synthèse.")
+        return await synthese.llm_synthese(pid, store.provider_key(pid), model, body["dossier"],
+                                           store.provider(pid).get("base_url") if p.base_editable else None)
+
+    @app.post("/api/jevlab/qcm")
+    async def jev_qcm(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        return {"classement": synthese.classer(body.get("reponses"), body.get("leviers"))}
 
     @app.get("/api/jevlab/saved/{fid}")
     async def get_saved_fiche(fid: str) -> dict[str, Any]:

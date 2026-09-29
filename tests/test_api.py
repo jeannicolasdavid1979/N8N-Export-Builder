@@ -367,3 +367,39 @@ def test_provider_favorites_and_jev_default_access(tmp_path, mock):
     assert c.put("/api/providers/openrouter", json={"jev_via": "openrouter"}).json()["jev_via"] == "typesafe"
     state = {p["id"]: p for p in c.get("/api/state").json()["providers"]}
     assert state["openrouter"]["favorites"][0] == "xiaomi/mimo-v2.6-flash" and state["typesafe"]["jev_via"] == "openrouter"
+
+
+def test_qcm_ranking_is_deterministic_and_explained(tmp_path, mock):
+    from n8n_builder import synthese
+    c, _ = make(tmp_path, mock)
+    assert c.get("/api/state").json()["qcm_leviers"]["leviers"]["prudent"] == "Ne rien laisser passer"
+    r = c.post("/api/jevlab/qcm", json={"reponses": {"gravite": "c", "temps": "c", "volume": "z", "inconnue": "a"},
+                                        "leviers": ["econome", "prudent", "autonome"]}).json()["classement"]
+    assert [x["id"] for x in r] == ["prudent", "econome", "autonome"] and r[0]["points"] == 5
+    assert r[0]["raisons"] == ["+3 : « Une perte d'argent ou un risque juridique »", "+2 : « Autant qu'il faut »"]
+    assert [x["id"] for x in synthese.classer({}, None)] == list(synthese.LEVIERS)
+
+
+def test_synthese_keeps_tool_figures_and_filters_the_llm(tmp_path, mock):
+    c, _ = make(tmp_path, mock)
+    c.put("/api/providers/openrouter", json={"key": "sk-or-v1-test"})
+    llm = {"fait": "Trente wagons sont passés — puis ont été rejoués.", "jev": [{"question": "action", "lecture": "Sépare bien."},
+                                                                          {"question": "inventee", "lecture": "x"}],
+           "leviers": [{"id": "prudent", "quand": "Si une erreur coûte cher.", "attention": "Plus de travail humain."},
+                       {"id": "magique", "quand": "jamais", "attention": ""}],
+           "recommandation": {"levier": "prudent", "pourquoi": "Votre QCM le place en tête."},
+           "conseil": "Ajoutez de vrais messages.", "etapes": ["Passer 30 vrais cas", ""]}
+    calls = []
+    mock.post("https://openrouter.ai/api/v1/chat/completions").mock(side_effect=lambda req: calls.append(json.loads(req.content)) or httpx.Response(
+        200, json={"choices": [{"message": {"content": "```json\n" + json.dumps(llm, ensure_ascii=False) + "\n```"}}]}))
+    dossier = {"automate": {"nom": "Tri", "questions": [{"id": "action"}]},
+               "leviers": [{"id": "econome", "erreurs": 1}, {"id": "prudent", "erreurs": 0}], "qcm": {"gravite": "c"}}
+    r = c.post("/api/jevlab/synthese", json={"provider": "openrouter", "model": "m", "dossier": dossier}).json()
+    s = r["synthese"]
+    assert s["fait"] == "Trente wagons sont passés, puis ont été rejoués."
+    assert [x["question"] for x in s["jev"]] == ["action"] and [x["id"] for x in s["leviers"]] == ["prudent"]
+    assert s["recommandation"]["levier"] == "prudent" and s["etapes"] == ["Passer 30 vrais cas"]
+    assert [x["id"] for x in r["classement"]] == ["prudent", "econome"]
+    user = calls[0]["messages"][1]["content"]
+    assert '"erreurs": 1' in user and "Une perte d'argent" in user
+    assert c.post("/api/jevlab/synthese", json={"provider": "openrouter", "model": "m"}).status_code == 400

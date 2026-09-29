@@ -20,6 +20,7 @@ import re
 from typing import Any
 
 from . import providers as P
+from .synthese import clean_qcm
 from .spec import ID_RE, ROUTE_RE, SpecError, slug, validate
 
 FORMAT = 1
@@ -237,7 +238,8 @@ def validate_fiche(raw: Any) -> dict[str, Any]:
         return min(max(x, 0.0), 1_000_000.0) if x == x else default
     voies = rg.get("voies") if isinstance(rg.get("voies"), dict) else {}
     f["reglage"] = {"cout_erreur": _eur(rg.get("cout_erreur"), 50.0), "cout_revue": _eur(rg.get("cout_revue"), 2.0),
-                    "voies": {k: v for k, v in voies.items() if k in rids and v in KINDS}}
+                    "voies": {k: v for k, v in voies.items() if k in rids and v in KINDS},
+                    "qcm": clean_qcm(rg.get("qcm"))}
     f["jev_fournisseur"] = raw.get("jev_fournisseur") if raw.get("jev_fournisseur") in ("typesafe", "openrouter") else "typesafe"
     f["modele"] = _s(raw.get("modele"), 80) or ("~typesafe/jev-latest" if f["jev_fournisseur"] == "openrouter" else "jev-latest")
     f["declencheur"] = raw.get("declencheur") if raw.get("declencheur") in ("webhook", "manual") else "webhook"

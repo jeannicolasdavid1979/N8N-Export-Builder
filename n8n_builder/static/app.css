@@ -275,3 +275,18 @@ dialog::backdrop { background: rgba(10, 12, 30, .45); }
 .fleet text { fill: var(--sc-text); font: 700 12.5px var(--font); }
 .fleet.moved rect { stroke: #8b8cf8; stroke-width: 2.5; }
 .fleet.bad rect { stroke: #ef4444; }
+
+/* QCM des priorités et synthèse IA */
+.qcm-q { display: flex; flex-direction: column; gap: 3px; padding: 8px 0; border-top: 1px dashed var(--border); }
+.qcm-q .check { display: flex; gap: 6px; align-items: center; }
+.rank { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 4px; }
+.rank li.first > b { color: var(--accent-text); }
+dialog.report { width: min(960px, 96vw); }
+.rep { padding: 22px 26px; max-height: 90vh; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+.rep-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; position: sticky; top: -22px; background: var(--surface); padding: 6px 0 10px; z-index: 1; }
+.rep-head h2 { margin: 0 0 4px; }
+.rep-sec { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+.rep-sec h3 { margin: 0; font-size: 16px; }
+.rep-sec p { margin: 0; line-height: 1.55; }
+.rep-q { background: var(--surface-2); border-radius: 10px; padding: 10px 12px; }
+.statbar .bar { margin-top: 3px; }

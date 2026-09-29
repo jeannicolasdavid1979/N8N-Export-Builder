@@ -160,7 +160,7 @@ def test_reglage_is_validated_and_kept():
                                                   "voies": {"a_relire": "humain", "inconnue": "auto", "classer": "n'importe"}}})
     assert f["reglage"]["cout_erreur"] == 120.0 and f["reglage"]["cout_revue"] == 0.0
     assert f["reglage"]["voies"] == {"a_relire": "humain"}
-    assert jevlab.validate_fiche(raw)["reglage"] == {"cout_erreur": 50.0, "cout_revue": 2.0, "voies": {}}
+    assert jevlab.validate_fiche(raw)["reglage"] == {"cout_erreur": 50.0, "cout_revue": 2.0, "voies": {}, "qcm": {}}
     tests = [{"entree": f"cas {i}", "attendu": "classer", "source": "ia" if i % 2 else "autre"} for i in range(120)]
     f = jevlab.validate_fiche({**raw, "tests": tests})
     assert len(f["tests"]) == 100 and [t["source"] for t in f["tests"][:2]] == ["reel", "ia"]

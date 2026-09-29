@@ -2004,8 +2004,207 @@ function salleCard() {
   if (J.preview) put(card, previewBox(lab, L));
   L.list.forEach(l => put(card, leverCard(lab, L, l)));
   put(card, equilibreManette(lab, L),
-    h('p', { class: 'small faint', text: 'Les manettes sont calculées sur vos wagons d\'essai, pas sur l\'avenir : gardez une voie humaine tant que les vrais messages n\'ont pas confirmé le réglage.' }));
+    h('p', { class: 'small faint', text: 'Les manettes sont calculées sur vos wagons d\'essai, pas sur l\'avenir : gardez une voie humaine tant que les vrais messages n\'ont pas confirmé le réglage.' }),
+    h('h3', { text: '4. Vos priorités (QCM)' }), qcmBlock(L),
+    h('h3', { text: '5. Synthèse IA' }), syntheseBlock(lab, L));
   return card;
+}
+
+// QCM des priorités et synthèse IA ------------------------------------------------------------------------
+// Le classement vient des réponses au QCM, par des points relisibles (même calcul que le serveur).
+// L'IA ne fait qu'expliquer : les chiffres du rapport viennent du banc d'essai.
+
+function classerQcm(rep, dispo) {
+  const def = S.data.qcm_leviers || { questions: [], leviers: {} };
+  const ids = Object.keys(def.leviers).filter(i => dispo.includes(i));
+  const score = Object.fromEntries(ids.map(i => [i, 0])), raisons = Object.fromEntries(ids.map(i => [i, []]));
+  for (const q of def.questions) {
+    const c = q.choix.find(x => x.id === (rep || {})[q.id]);
+    if (!c) continue;
+    for (const [lid, pts] of Object.entries(c.points)) if (lid in score) { score[lid] += pts; raisons[lid].push(`+${pts} : « ${c.texte} »`); }
+  }
+  return ids.sort((a, b) => score[b] - score[a] || ids.indexOf(a) - ids.indexOf(b)).map(i => ({ id: i, nom: def.leviers[i], points: score[i], raisons: raisons[i] }));
+}
+
+function rankList(cl) {
+  return h('ol', { class: 'rank' }, cl.map((c, i) => h('li', { class: i === 0 ? 'first' : '' },
+    h('b', { text: c.nom }), ` · ${c.points} point${c.points > 1 ? 's' : ''}`,
+    c.raisons.length ? h('div', { class: 'small faint', text: c.raisons.join(' ; ') }) : null)));
+}
+
+function qcmBlock(L) {
+  const def = S.data.qcm_leviers || { questions: [] };
+  const rg = reglageOf();
+  rg.qcm = rg.qcm || {};
+  const dispo = L ? L.list.map(l => l.id).filter(id => id !== 'actuel') : ['econome', 'prudent', 'autonome'];
+  const rank = h('div');
+  const draw = () => {
+    const n = Object.keys(rg.qcm).length;
+    put(clear(rank), n ? h('div', { class: 'stack' }, h('b', { class: 'small', text: `Votre ordre de priorité (${n} réponse${n > 1 ? 's' : ''} sur ${def.questions.length}) :` }), rankList(classerQcm(rg.qcm, dispo)))
+      : h('p', { class: 'small faint', text: 'Répondez pour voir les manettes classées selon vos priorités.' }));
+  };
+  draw();
+  return h('div', { class: 'stack' },
+    h('p', { class: 'small muted', text: 'Cinq questions sur votre situation. Chaque réponse donne des points aux manettes ; le classement se met à jour tout de suite, et la synthèse IA en tient compte.' }),
+    def.questions.map(q => h('div', { class: 'qcm-q' }, h('div', { class: 'small', style: 'font-weight:600', text: q.question }),
+      q.choix.map(c => h('label', { class: 'check small' },
+        h('input', { type: 'radio', name: 'qcm-' + q.id, checked: rg.qcm[q.id] === c.id, onchange: () => { rg.qcm[q.id] = c.id; draw(); } }), c.texte)))),
+    rank);
+}
+
+// Ce que Jev a répondu, regroupé par voie attendue : la matière du chapitre « Ce que Jev a conclu ».
+function jevStats(lab) {
+  const MES = { noul: 'probabilité moyenne du oui', choice: 'confiance moyenne', liste: 'confiance moyenne', score: 'score moyen',
+    etiquettes: 'nombre moyen d\'étiquettes retenues', pour_chaque: 'nombre moyen d\'éléments gardés' };
+  return J.fiche.questions.map(q => {
+    const by = {};
+    for (const d of lab.data) {
+      const ans = d.res.answers || {}, a = ans[q.id];
+      const e = by[d.test.attendu || '(non précisé)'] = by[d.test.attendu || '(non précisé)'] || { cas: 0, somme: 0, mots: {} };
+      if (q.type === 'noul' && a) { e.cas++; e.somme += a.noul; }
+      else if ((q.type === 'choice' || q.type === 'liste') && a) { e.cas++; e.somme += a.confidence; const w = q.type === 'liste' ? 'élément ' + String(a.choice).replace(/^c/, '') : a.choice; e.mots[w] = (e.mots[w] || 0) + 1; }
+      else if (q.type === 'score' && a) { e.cas++; e.somme += a.score; }
+      else if (q.type === 'etiquettes' || q.type === 'pour_chaque') {
+        const subs = Object.entries(ans).filter(([k]) => k.startsWith(q.id + '__'));
+        if (subs.length) { e.cas++; e.somme += subs.filter(([, x]) => x.noul >= (q.seuil ?? 60) / 100).length; }
+      }
+    }
+    return { id: q.id, type: q.type, question: q.question, mesure: MES[q.type], ...(q.type === 'score' ? { echelle: (q.niveaux || []).length - 1 } : {}),
+      par_voie_attendue: Object.entries(by).filter(([, e]) => e.cas).map(([voie, e]) => ({ voie, cas: e.cas, moyenne: Math.round(e.somme / e.cas * 100) / 100, ...(Object.keys(e.mots).length ? { mots: e.mots } : {}) })) };
+  });
+}
+
+function syntheseDossier(lab, L) {
+  const f = J.fiche, rg = reglageOf();
+  const lev = l => ({ id: l.id, nom: l.nom, seuils: lab.knobs.map((k, i) => k.texte(l.vals[i])), conformes: l.m.ok, etiquetes: l.m.labeled,
+    erreurs: l.m.errors, passages_humains: l.m.humains, cout_pour_1000_wagons_eur: Math.round(l.cout / Math.max(1, l.m.n) * 1000),
+    ...(l.same ? { identique_a: l.same } : {}), ...(l.dropLlm ? { sans_llm_de_route: true } : {}) });
+  const tests = f.tests || [];
+  return {
+    automate: { nom: f.name, objectif: f.objectif, questions: f.questions.map(q => ({ id: q.id, type: q.type, question: q.question })),
+      voies: f.resultats.map(r => ({ id: r.id, label: r.label, nature: KIND_VOIE[voieKind(r.id)] })), regles: f.regles.length,
+      llm_entree: !!f.llm_entree, llm_de_route: (J.preview ? J.preview.backup.llms : (f.llms || [])).map(l => l.route) },
+    banc: { cas: tests.length, avec_resultat_attendu: tests.filter(t => t.attendu).length, inventes_par_ia: tests.filter(t => t.source === 'ia').length, passes_chez_jev: lab.data.length },
+    prix: { erreur_eur: rg.cout_erreur, passage_humain_eur: rg.cout_revue },
+    jev: jevStats(lab),
+    reglage_actuel: lev(L.list.find(l => l.id === 'actuel')),
+    leviers: L.list.filter(l => l.id !== 'actuel').map(lev),
+    qcm: { ...(rg.qcm || {}) },
+  };
+}
+
+function syntheseBlock(lab, L) {
+  const chat = chatProviders().filter(p => p.configured);
+  if (!chat.length) return h('p', { class: 'small' }, 'Synthèse IA : ', h('a', { href: '#modeles', text: 'ajoutez une clé OpenRouter ou branchez Ollama' }), '.');
+  const st = jAssist();
+  const status = h('div', { class: 'small muted' });
+  return h('div', { class: 'stack' },
+    h('p', { class: 'small muted', text: 'Un rapport pas à pas : ce qui a été fait, ce que Jev a conclu, les manettes et quand choisir chacune, votre ordre de priorité, une recommandation et un conseil. Les chiffres viennent de l\'outil ; l\'IA les explique.' }),
+    h('details', {}, h('summary', { class: 'small', text: `Rédigée par : ${st.model || 'modèle à choisir'}` }),
+      h('div', { class: 'stack' },
+        field('Fournisseur', selectEl(chat.map(p => [p.id, p.label]), st.provider, v => { st.provider = v; st.model = (provider(v) || {}).default_model || ''; jGraph(); })),
+        field('Modèle', modelInput(st.provider, st.model, v => { st.model = v; })))),
+    h('div', { class: 'row' },
+      h('button', { class: 'primary', text: '✦ Synthèse IA', onclick: () => runSynthese(lab, L, status) }),
+      J.synthese ? h('button', { class: 'small', text: 'Revoir la dernière', onclick: () => openSynthese(J.synthese) }) : null),
+    status);
+}
+
+async function runSynthese(lab, L, status) {
+  const st = jAssist();
+  if (!st.provider) return toast('Configurez un fournisseur de discussion dans Modèles LLM.', true);
+  const dossier = syntheseDossier(lab, L);
+  status.textContent = 'L\'IA rédige la synthèse à partir des chiffres du banc…';
+  try {
+    const r = await api('POST', '/api/jevlab/synthese', { provider: st.provider, model: st.model, dossier });
+    J.synthese = { ...r, dossier, date: Date.now() };
+    status.textContent = '';
+    openSynthese(J.synthese);
+  } catch (e) { status.textContent = ''; toast(e.message, true); }
+}
+
+function statBars(q) {
+  const scale = q.type === 'score' ? Math.max(1, q.echelle || 1) : 1;
+  const unit = { noul: ' de oui', choice: ' de confiance', liste: ' de confiance' }[q.type];
+  return h('div', { class: 'stack' }, q.par_voie_attendue.map(v => {
+    const pct = unit ? Math.round(v.moyenne * 100) : null;
+    const mots = v.mots ? ' · ' + Object.entries(v.mots).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([w, n]) => `${w} (${n})`).join(', ') : '';
+    return h('div', { class: 'statbar' },
+      h('div', { class: 'small', text: `Wagons attendus sur « ${v.voie} » (${v.cas}) : ` + (unit ? `${pct} %${unit} en moyenne` : `${fmtNum(v.moyenne, 2)} en moyenne${q.type === 'score' ? ' sur ' + scale : ''}`) + mots }),
+      unit || q.type === 'score' ? h('div', { class: 'bar' }, h('span', { style: `width:${Math.round(Math.min(1, v.moyenne / scale) * 100)}%` })) : null);
+  }));
+}
+
+function syntheseMarkdown(R) {
+  const s = R.synthese, d = R.dossier;
+  const all = [d.reglage_actuel, ...d.leviers];
+  const L = [`# Synthèse : ${d.automate.nom}`, '', `Rédigée par ${R.modele} le ${new Date(R.date).toLocaleString('fr-FR')}. Les chiffres viennent du banc d'essai.`, '',
+    '## 1. Ce qui a été fait', '', s.fait, '', `${d.banc.passes_chez_jev} wagons passés chez Jev, ${d.banc.avec_resultat_attendu} avec le résultat attendu, ${d.banc.inventes_par_ia} inventés par l'IA. Prix : erreur ${d.prix.erreur_eur} €, passage humain ${d.prix.passage_humain_eur} €.`, '',
+    '## 2. Ce que Jev a conclu', ''];
+  for (const q of d.jev) {
+    L.push(`### ${q.id}`, '', q.question, '', ((s.jev.find(x => x.question === q.id) || {}).lecture || ''), '');
+    q.par_voie_attendue.forEach(v => L.push(`- attendus sur « ${v.voie} » (${v.cas}) : ${q.mesure} ${v.moyenne}`));
+    L.push('');
+  }
+  L.push('## 3. Les manettes', '', '| Manette | Conformes | Erreurs | Passages humains | Coût pour 1 000 wagons |', '|---|---|---|---|---|');
+  all.forEach(l => L.push(`| ${l.nom} | ${l.conformes} / ${l.etiquetes} | ${l.erreurs} | ${l.passages_humains} | ${l.cout_pour_1000_wagons_eur.toLocaleString('fr-FR')} € |`));
+  L.push('');
+  s.leviers.forEach(x => { const l = all.find(y => y.id === x.id); if (l) L.push(`**${l.nom}.** Quand le choisir : ${x.quand} Attention : ${x.attention}`, ''); });
+  L.push('## 4. Vos priorités (QCM)', '');
+  if (Object.keys(d.qcm || {}).length) R.classement.forEach((c, i) => L.push(`${i + 1}. ${c.nom} (${c.points} points)${c.raisons.length ? ' : ' + c.raisons.join(' ; ') : ''}`));
+  else L.push('QCM non rempli.');
+  const rec = all.find(l => l.id === s.recommandation.levier);
+  L.push('', '## 5. Recommandation', '', rec ? `**${rec.nom}.** ${s.recommandation.pourquoi}` : s.recommandation.pourquoi, '', '## 6. Conseil', '', s.conseil, '');
+  s.etapes.forEach((e, i) => L.push(`${i + 1}. ${e}`));
+  return L.join('\n');
+}
+
+function openSynthese(R) {
+  const s = R.synthese, d = R.dossier;
+  const all = [d.reglage_actuel, ...d.leviers];
+  const dlg = h('dialog', { class: 'report' });
+  const sec = (title, ...kids) => h('section', { class: 'rep-sec' }, h('h3', { text: title }), ...kids);
+  const md = syntheseMarkdown(R);
+  const rec = all.find(l => l.id === s.recommandation.levier);
+  const tryLever = () => {
+    const lab = reglageLab(); if (!lab) return;
+    const l = computeLevers(lab).list.find(x => x.id === s.recommandation.levier);
+    if (l) { dlg.close(); previewLever(lab, l); }
+  };
+  put(dlg, h('div', { class: 'rep' },
+    h('div', { class: 'rep-head' },
+      h('div', {}, h('h2', { text: '✦ Synthèse : ' + d.automate.nom }),
+        h('div', { class: 'small muted', text: `Rédigée par ${R.modele} le ${new Date(R.date).toLocaleString('fr-FR')}. Les chiffres viennent du banc d'essai, l'IA les explique.` })),
+      h('div', { class: 'row' },
+        h('button', { class: 'small', text: 'Copier', onclick: async () => { try { await navigator.clipboard.writeText(md); toast('Synthèse copiée'); } catch { toast('Copie refusée par le navigateur', true); } } }),
+        h('button', { class: 'small', text: 'Télécharger (.md)', onclick: () => { const a = h('a', { href: URL.createObjectURL(new Blob([md], { type: 'text/markdown' })), download: slug(d.automate.nom) + '-synthese.md' }); a.click(); } }),
+        h('button', { class: 'small', text: 'Fermer', onclick: () => dlg.close() }))),
+    sec('🚉 1. Ce qui a été fait', h('p', { text: s.fait }),
+      h('div', { class: 'chips' }, chip('🚃', `${d.banc.passes_chez_jev} wagons passés chez Jev`), chip('🏷', `${d.banc.avec_resultat_attendu} avec le résultat attendu`),
+        d.banc.inventes_par_ia ? chip('✦', `${d.banc.inventes_par_ia} inventé(s) par l'IA`) : null, chip('€', `erreur ${d.prix.erreur_eur} €, passage humain ${d.prix.passage_humain_eur} €`))),
+    sec('🧠 2. Ce que Jev a conclu',
+      h('p', { class: 'small muted', text: 'Pour chaque question, les wagons sont regroupés selon la voie où ils devaient aller. Une question utile donne des réponses bien différentes d\'une voie à l\'autre.' }),
+      d.jev.map(q => h('div', { class: 'rep-q stack' }, h('div', {}, h('b', { class: 'mono', text: q.id }), h('span', { class: 'small muted', text: ' · ' + q.question })),
+        (s.jev.find(x => x.question === q.id) || {}).lecture ? h('p', { text: s.jev.find(x => x.question === q.id).lecture }) : null, statBars(q)))),
+    sec('🎛 3. Les manettes, et quand choisir chacune', all.map(l => {
+      const x = s.leviers.find(y => y.id === l.id) || {};
+      return h('div', { class: 'lever' + (rec === l ? ' on' : '') },
+        h('div', { class: 'row between' }, h('b', { text: l.nom }), rec === l ? h('span', { class: 'badge accent', text: 'recommandée' }) : null),
+        h('div', { class: 'chips' }, chip('✓', `${l.conformes} / ${l.etiquetes} conformes`), chip('✗', `${l.erreurs} erreur(s)`, l.erreurs ? 'bad' : 'good'),
+          chip('👤', `${l.passages_humains} passage(s) humain(s)`), chip('€', `≈ ${l.cout_pour_1000_wagons_eur.toLocaleString('fr-FR')} € pour 1 000 wagons`)),
+        l.identique_a ? h('div', { class: 'small faint', text: `Même réglage que « ${l.identique_a} ».` }) : null,
+        x.quand ? h('div', { class: 'small' }, h('b', { text: 'Quand la choisir : ' }), x.quand) : null,
+        x.attention ? h('div', { class: 'small' }, h('b', { text: 'Attention : ' }), x.attention) : null);
+    })),
+    sec('🧭 4. Vos priorités (QCM)', Object.keys(d.qcm || {}).length ? rankList(R.classement)
+      : h('p', { class: 'small muted', text: 'QCM non rempli : la recommandation repose seulement sur les chiffres. Répondez au QCM dans la salle de réglage, puis relancez la synthèse.' })),
+    sec('✅ 5. Notre recommandation', h('div', { class: 'notice ok stack' },
+      rec ? h('div', {}, 'Manette conseillée : ', h('b', { text: rec.nom })) : null, h('p', { text: s.recommandation.pourquoi }),
+      rec && rec.id !== 'actuel' ? h('div', {}, h('button', { class: 'primary small', text: 'Essayer cette manette sur la voie', onclick: tryLever })) : null)),
+    sec('💡 6. Conseil', h('p', { text: s.conseil }), s.etapes.length ? h('div', {}, h('b', { class: 'small', text: 'Prochaines étapes' }), h('ol', {}, s.etapes.map(e => h('li', { text: e })))) : null)));
+  document.body.append(dlg);
+  dlg.addEventListener('close', () => dlg.remove());
+  dlg.showModal();
 }
 
 // Les wagons du banc sur la voie : combien arrivent sur chaque voie avec le réglage affiché.
