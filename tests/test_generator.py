@@ -36,7 +36,7 @@ def test_every_template_builds_a_consistent_graph(tid):
         reach.add(n)
         for branch in wf["connections"].get(n, {}).get("main", []):
             todo += [l["node"] for l in branch]
-    assert reach == {n for n in names if n != "Note"}
+    assert reach == {n for n in names if n not in ("Note", G.N_ORIGIN)}
     routes = routes_of(s)
     if len(routes) > 1:
         sw = next(n for n in wf["nodes"] if n["name"] == "Aiguillage")

@@ -128,7 +128,7 @@ function emptySpec(raw) {
 
 async function loadTemplate(tid) {
   const t = await api('GET', `/api/templates/${tid}`);
-  S.spec = emptySpec(t.spec); S.tplId = tid; S.savedId = null; S.test = null; S.manual = null;
+  S.spec = emptySpec(t.spec); S.tplId = tid; S.savedId = null; S.test = null; S.manual = null; S.target = null;
   applyDefaultLlm();
   renderAtelier($('#main'));
 }
@@ -143,7 +143,7 @@ function applyDefaultLlm() {
 
 async function loadSaved(wid) {
   const w = await api('GET', `/api/workflows/${wid}`);
-  S.spec = emptySpec(w.spec); S.savedId = wid; S.tplId = null; S.test = null; S.manual = null;
+  S.spec = emptySpec(w.spec); S.savedId = wid; S.tplId = null; S.test = null; S.manual = null; S.target = null;
   renderAtelier($('#main'));
 }
 
@@ -182,6 +182,7 @@ async function renderAtelier(main) {
         h('p', { class: 'muted', text: "L'IA conçoit une fois, le code et Jev exécutent mille fois : mêmes entrées, même décision." })),
       h('div', { class: 'row' },
         viewToggle(S.view || 'form', v => { S.view = v; renderAtelier($('#main')); }),
+        h('button', { onclick: openImport, text: 'Importer depuis n8n', title: 'Reprendre un workflow de votre n8n' }),
         h('button', { onclick: saveSpec, text: 'Enregistrer' }),
         h('button', { onclick: () => S.build && download(slug(S.spec.name) + '.json', S.build.workflow), text: 'Télécharger le JSON' }),
         h('button', { onclick: () => S.build && openHubExport({ spec: S.spec }), text: 'Exporter vers le Hub' }),
@@ -740,7 +741,7 @@ async function saveSpec() {
 function atelierPushCtx() {
   if (!S.build || S.errors) return null;
   return {
-    payload: () => ({ spec: S.spec }), trigger: S.build.spec.trigger.type,
+    payload: () => ({ spec: S.spec }), trigger: S.build.spec.trigger.type, target: S.target,
     save: async () => { if (!S.savedId) { const r = await api('POST', '/api/workflows', { spec: S.spec }); S.savedId = r.id; } return S.savedId; },
     after: () => renderLibrary(),
   };
@@ -751,7 +752,8 @@ async function openPush(ctx = atelierPushCtx()) {
   const dlg = $('#dialog');
   const insts = S.data.instances;
   const spec = { trigger: { type: ctx.trigger } };
-  const st = { iid: (insts[0] || {}).id, activate: spec.trigger.type !== 'manual', creds: true, update: '' };
+  const tg = ctx.target && insts.some(i => i.id === ctx.target.iid) ? ctx.target : null;
+  const st = { iid: tg ? tg.iid : (insts[0] || {}).id, activate: spec.trigger.type !== 'manual', creds: true, update: tg ? String(tg.wid) : '' };
   const body = h('div', { class: 'dlg stack' });
   const draw = async () => {
     clear(body);
@@ -802,6 +804,124 @@ function pushResult(r) {
     r.webhook_url ? field('Adresse du webhook', h('input', { value: r.webhook_url, readonly: true })) : null,
     r.secret ? h('div', { class: 'notice warn' }, h('b', { text: 'Clé du webhook, affichée une seule fois : ' }), h('span', { class: 'mono', text: r.secret })) : null,
     r.curl ? h('pre', { class: 'json', text: r.curl }) : null);
+}
+
+// Importer depuis n8n --------------------------------------------------------------------------------------
+// Un workflow du builder revient à l'identique grâce à sa carte d'origine ; tout autre workflow est analysé,
+// et l'IA peut le convertir en fiche du Labo Jev. Le workflow d'origine n'est jamais modifié dans n8n.
+
+const IMPORT_GROUPS = [['declencheur', '🚉', 'Déclencheurs', 'déclencheur', 'déclencheurs'], ['llm', '✍', 'LLM', 'LLM', 'LLM'],
+  ['jev', '🧠', 'Jev', 'appel à Jev', 'appels à Jev'], ['decision', '🔀', 'Décisions', 'décision', 'décisions'],
+  ['code', '🛠', 'Code', 'nœud de code', 'nœuds de code'], ['action', '📦', 'Actions', 'action', 'actions']];
+
+function openImport() {
+  const dlg = $('#dialog');
+  dlg.classList.add('wide');
+  const st = { tab: S.data.instances.length ? 'instance' : 'fichier', iid: (S.data.instances[0] || {}).id, list: null, text: '', results: null };
+  const body = h('div', { class: 'dlg stack' });
+  const out = h('div', { class: 'stack' });
+  const show = (entries, srcOf) => { put(clear(out), entries.map((e, i) => importResult(e, srcOf(i), dlg))); };
+  const loadList = async () => {
+    st.list = null; draw();
+    try { st.list = (await api('GET', `/api/n8n/${st.iid}/workflows`)).workflows; } catch (e) { st.list = { error: e.message }; }
+    draw();
+  };
+  const draw = () => {
+    clear(body);
+    put(body, h('div', { class: 'row between' }, h('h2', { style: 'margin:0', text: 'Importer depuis n8n' }), h('button', { class: 'small', text: 'Fermer', onclick: () => dlg.close() })),
+      tuto('import', 'reprendre vos workflows', [
+        ['Un workflow ', h('b', { text: 'envoyé par le builder' }), ' revient à l\'identique : il porte une carte d\'origine (une note « Source du builder » dans n8n). Les cas de test ne voyagent pas : ils restent dans « Mes fiches ».'],
+        ['Un workflow ', h('b', { text: 'fait à la main' }), ' est analysé nœud par nœud : l\'outil repère ce qui peut devenir une question Jev (un LLM qui classe, une condition sur une réponse d\'IA).'],
+        ['L\'IA peut alors le ', h('b', { text: 'convertir en fiche du Labo Jev' }), ', que vous réglez et testez. Votre workflow d\'origine n\'est jamais modifié : l\'automate converti part comme un nouveau workflow.'],
+      ]),
+      h('div', { class: 'seg' },
+        h('button', { class: st.tab === 'instance' ? 'on' : '', text: 'Depuis une instance', onclick: () => { st.tab = 'instance'; draw(); } }),
+        h('button', { class: st.tab === 'fichier' ? 'on' : '', text: 'Depuis un fichier', onclick: () => { st.tab = 'fichier'; draw(); } })));
+    if (st.tab === 'instance') {
+      if (!S.data.instances.length) put(body, h('p', {}, 'Aucune instance reliée. ', h('a', { href: '#n8n', onclick: () => dlg.close(), text: 'Relier une instance n8n' }), ', ou importez un fichier.'));
+      else {
+        put(body, field('Instance', selectEl(S.data.instances.map(i => [i.id, `${i.label} · ${i.url}`]), st.iid, v => { st.iid = v; loadList(); })));
+        if (!st.list) put(body, h('p', { class: 'small muted', text: 'Lecture des workflows…' }));
+        else if (st.list.error) put(body, h('div', { class: 'notice err small', text: st.list.error }));
+        else put(body, h('div', { class: 'models', style: 'max-height:260px' }, h('table', {}, h('tbody', {}, st.list.map(w => h('tr', {},
+          h('td', {}, h('b', { text: w.name })),
+          h('td', {}, w.builder ? h('span', { class: 'badge accent', text: w.builder === 'ancien' ? 'builder, ancienne version' : 'fait par le builder' }) : h('span', { class: 'badge', text: 'fait dans n8n' })),
+          h('td', {}, h('span', { class: 'badge ' + (w.active ? 'ok' : ''), text: w.active ? 'actif' : 'inactif' })),
+          h('td', { style: 'text-align:right' }, h('button', { class: 'small', text: 'Importer', onclick: async ev => {
+            ev.target.disabled = true;
+            try { show([await api('GET', `/api/n8n/${st.iid}/workflows/${w.id}/import`)], () => ({ iid: st.iid, wid: w.id })); }
+            catch (e) { put(clear(out), h('div', { class: 'notice err', text: e.message })); }
+            ev.target.disabled = false;
+          } }))))))));
+      }
+    } else {
+      const file = h('input', { type: 'file', accept: '.json,application/json', onchange: async e => { const f = e.target.files[0]; if (f) { st.text = await f.text(); ta.value = st.text; } } });
+      const ta = textArea(st.text, v => { st.text = v; }, { rows: 5, class: 'code', placeholder: 'Ou collez ici le JSON du workflow (n8n : menu ⋯ du workflow, Télécharger).' });
+      put(body, h('p', { class: 'small muted', text: 'Dans n8n, ouvrez le workflow, menu ⋯ en haut à droite, « Télécharger ». Un fichier peut contenir un ou plusieurs workflows.' }),
+        file, ta, h('div', {}, h('button', { class: 'primary', text: 'Analyser', onclick: async () => {
+          try { const text = st.text; show((await api('POST', '/api/import/analyse', { texte: text })).workflows, i => ({ texte: text, index: i })); }
+          catch (e) { put(clear(out), h('div', { class: 'notice err', text: e.message })); }
+        } })));
+    }
+    put(body, out);
+  };
+  put(clear(dlg), body);
+  dlg.addEventListener('close', () => dlg.classList.remove('wide'), { once: true });
+  dlg.showModal();
+  draw();
+  if (st.tab === 'instance' && st.iid) loadList();
+}
+
+function importResult(e, src, dlg) {
+  const o = e.origine, a = e.analyse;
+  const card = h('div', { class: 'card stack' }, h('div', { class: 'row between' }, h('h3', { style: 'margin:0', text: e.nom }),
+    o && !o.erreur ? h('span', { class: 'badge accent', text: o.reconstruit ? 'builder, ancienne version' : 'fait par le builder' }) : h('span', { class: 'badge', text: `${a.noeuds} nœuds` })));
+  if (o && !o.erreur) {
+    const openJev = () => {
+      J.fiche = clone(o.fiche); J.fid = null; J.savedId = null; J.bench = null; J.calib = null; J.essai = null; J.scene = null; J.preview = null; J.lab = null; J.leviers = null;
+      J.target = src.iid ? src : null; dlg.close(); location.hash = '#jev'; route();
+    };
+    const openN8n = () => { S.spec = emptySpec(o.spec); S.savedId = null; S.tplId = null; S.test = null; S.target = src.iid ? src : null; dlg.close(); location.hash = '#atelier'; route(); };
+    const mine = o.fiche && S.data.mes_fiches.find(f => f.name === o.fiche.name);
+    put(card, h('div', { class: 'notice ok small', text: (o.reconstruit
+        ? 'Envoyé par une ancienne version du builder, sans carte d\'origine : l\'automate est reconstruit depuis son code (modèle, questions, seuils, règles, LLM), et le code régénéré est vérifié. Non récupérables : l\'exemple d\'entrée et les consignes des voies, à reprendre dans le Labo n8n.'
+        : 'Carte d\'origine trouvée : l\'automate revient tel que le builder l\'a envoyé.') + (src.iid ? ' Au prochain envoi, « Remplacer » ce workflow est présélectionné, et il recevra sa carte d\'origine.' : '') }),
+      o.modifications.length ? h('div', { class: 'notice warn small stack' }, h('b', { text: 'Modifié dans n8n depuis l\'envoi :' }), h('ul', {}, o.modifications.map(m => h('li', { text: m }))),
+        h('div', { text: 'Ces changements ne sont pas dans la carte d\'origine : un nouvel envoi depuis le builder les écraserait. Reportez-les dans le builder, ou gardez ce workflow tel quel dans n8n.' })) : null,
+      o.fiche ? h('p', { class: 'small muted', text: mine ? `Les cas de test ne voyagent pas dans n8n : ils sont dans « Mes fiches : ${mine.name} ».` : 'Les cas de test ne voyagent pas dans n8n : ajoutez-en dans le banc d\'essai.' }) : null,
+      h('div', { class: 'row' }, o.fiche ? h('button', { class: 'primary', text: 'Ouvrir dans le Labo Jev', onclick: openJev }) : null,
+        h('button', { class: o.fiche ? '' : 'primary', text: 'Ouvrir dans le Labo n8n', onclick: openN8n })));
+    return card;
+  }
+  if (o && o.erreur) put(card, h('div', { class: 'notice warn small', text: o.erreur + ' Le workflow est analysé comme un workflow fait à la main.' }));
+  put(card, h('div', { class: 'chips' }, IMPORT_GROUPS.map(([k, icon, , one, many]) => a[k].length ? chip(icon, `${a[k].length} ${a[k].length > 1 ? many : one}`) : null)));
+  put(card, a.candidats.length
+    ? h('div', { class: 'stack' }, h('b', { class: 'small', text: 'Ce que Jev peut reprendre :' }), h('ul', { class: 'small' }, a.candidats.map(c => h('li', { text: c }))))
+    : h('p', { class: 'small muted', text: 'Aucun LLM ni aucune condition : ce workflow ne prend pas de décision que Jev pourrait reprendre.' }));
+  put(card, h('details', {}, h('summary', { class: 'small', text: 'Détail des nœuds' }),
+    IMPORT_GROUPS.map(([k, icon, label]) => a[k].length ? h('div', { class: 'stack', style: 'margin-top:6px' }, h('b', { class: 'small', text: `${icon} ${label}` }),
+      a[k].map(it => h('div', { class: 'small' }, h('b', { text: it.nom }), h('span', { class: 'faint', text: ` (${it.type}) ` }), it.detail || ''))) : null)));
+  const chat = chatProviders().filter(p => p.configured);
+  if (!a.llm.length && !a.decision.length) return card;
+  if (!chat.length) return put(card, h('p', { class: 'small' }, 'Conversion par l\'IA : ', h('a', { href: '#modeles', onclick: () => dlg.close(), text: 'ajoutez une clé OpenRouter ou branchez Ollama' }), '.'));
+  const st = jAssist();
+  const status = h('span', { class: 'small muted' });
+  put(card, h('div', { class: 'row' },
+    field('Fournisseur', selectEl(chat.map(p => [p.id, p.label]), st.provider, v => { st.provider = v; st.model = (provider(v) || {}).default_model || ''; }), 'w180'),
+    field('Modèle', modelInput(st.provider, st.model, v => { st.model = v; }), 'grow')),
+    h('div', { class: 'row' }, h('button', { class: 'primary', text: '✦ Convertir en fiche Labo Jev', onclick: async ev => {
+      ev.target.disabled = true; status.textContent = 'L\'IA lit le workflow et remplit la fiche…';
+      try {
+        const from = src.iid ? { instance: src.iid, id: src.wid } : { texte: src.texte, index: src.index };
+        const r = await api('POST', '/api/import/convertir', { provider: st.provider, model: st.model, ...from });
+        J.fiche = r.fiche; J.fid = null; J.savedId = null; J.bench = null; J.calib = null; J.essai = null; J.scene = null; J.preview = null; J.lab = null; J.leviers = null; J.target = null;
+        Object.keys(J.fiche.ia || {}).forEach(k => { J.openWhy[k] = false; });
+        dlg.close(); location.hash = '#jev'; route();
+        toast('Fiche proposée par l\'IA : chaque case dit pourquoi. Réglez, puis faites passer les wagons d\'essai.');
+      } catch (err) { status.textContent = ''; toast(err.message + (err.errors ? ' : ' + err.errors.join(' ; ') : ''), true); ev.target.disabled = false; }
+    } }), status),
+    h('p', { class: 'small faint', text: 'Votre workflow d\'origine n\'est pas modifié : l\'automate converti sera envoyé comme un nouveau workflow.' }));
+  return card;
 }
 
 // Modèles LLM -----------------------------------------------------------------------------------------
@@ -965,9 +1085,11 @@ function instanceCard(i) {
           const r = await api('GET', `/api/n8n/${i.id}/workflows`);
           put(clear(wfBox), r.workflows.length ? h('table', {}, h('tbody', {}, r.workflows.map(w => h('tr', {},
             h('td', {}, h('a', { href: `${r.base}/workflow/${w.id}`, target: '_blank', rel: 'noopener', text: w.name })),
+            h('td', {}, w.builder ? h('span', { class: 'badge accent', text: w.builder === 'ancien' ? 'builder, ancienne version' : 'fait par le builder' }) : null),
             h('td', {}, h('span', { class: 'badge ' + (w.active ? 'ok' : ''), text: w.active ? 'actif' : 'inactif' })))))) : h('p', { class: 'small muted', text: 'Aucun workflow.' }));
         } catch (e) { put(clear(wfBox), h('div', { class: 'notice err small', text: e.message })); }
       } }),
+      h('button', { class: 'small', text: 'Importer un workflow', onclick: openImport }),
       h('a', { class: 'btn small', href: i.url, target: '_blank', rel: 'noopener', text: 'Ouvrir n8n' }),
       h('span', { class: 'spacer' }),
       h('button', { class: 'small danger', text: 'Retirer', onclick: async () => { if (!confirm('Retirer cette instance du builder ? (rien n\'est supprimé dans n8n)')) return; await api('DELETE', `/api/n8n/${i.id}`); await loadState(); route(); } })),
@@ -1100,12 +1222,12 @@ function jAssist() {
 
 async function loadFicheType(fid) {
   const f = await api('GET', `/api/jevlab/fiches/${fid}`);
-  J.fiche = f.fiche; J.fid = fid; J.savedId = null; J.bench = null; J.calib = null; J.essai = null; J.scene = null; J.preview = null; J.lab = null; J.leviers = null;
+  J.fiche = f.fiche; J.fid = fid; J.savedId = null; J.bench = null; J.calib = null; J.essai = null; J.scene = null; J.preview = null; J.lab = null; J.leviers = null; J.target = null;
   renderJevLab($('#main'));
 }
 async function loadSavedFiche(id) {
   const f = await api('GET', `/api/jevlab/saved/${id}`);
-  J.fiche = f.fiche; J.savedId = id; J.fid = null; J.bench = null; J.calib = null; J.essai = null; J.scene = null; J.preview = null; J.lab = null; J.leviers = null;
+  J.fiche = f.fiche; J.savedId = id; J.fid = null; J.bench = null; J.calib = null; J.essai = null; J.scene = null; J.preview = null; J.lab = null; J.leviers = null; J.target = null;
   renderJevLab($('#main'));
 }
 
@@ -1122,6 +1244,7 @@ async function renderJevLab(main) {
         h('p', { class: 'muted', text: 'Réglez un automate de décision case par case. L\'IA propose et explique, vous ajustez, le banc d\'essai vérifie. À l\'exécution, aucun LLM : Jev et des règles.' })),
       h('div', { class: 'row' },
         viewToggle(J.view || 'form', v => { J.view = v; renderJevLab($('#main')); }),
+        h('button', { text: 'Importer depuis n8n', title: 'Reprendre un workflow de votre n8n', onclick: openImport }),
         h('button', { text: 'Enregistrer', onclick: saveFiche }),
         h('button', { text: 'Ouvrir dans le Labo n8n', title: 'Mode expert : la même logique, tous les réglages', onclick: openInN8nLab }),
         h('button', { text: 'Exporter vers le Hub', onclick: () => openHubExport({ fiche: J.fiche }) }),
@@ -1157,7 +1280,7 @@ function jGraph() {
 
 function jevPushCtx() {
   if (!J.compiled || J.errors) return null;
-  return { payload: () => ({ fiche: J.fiche }), trigger: J.compiled.spec.trigger.type, save: async () => null };
+  return { payload: () => ({ fiche: J.fiche }), trigger: J.compiled.spec.trigger.type, save: async () => null, target: J.target };
 }
 
 async function openInN8nLab() {
@@ -1228,7 +1351,7 @@ function jAssistCard() {
     status.textContent = 'L\'IA remplit les cases et explique ses choix…';
     try {
       const r = await api('POST', '/api/jevlab/fill', { provider: st.provider, model: st.model, description: st.description, context: st.context, fiche: improve ? J.fiche : null });
-      J.fiche = r.fiche; J.fid = null; J.savedId = improve ? J.savedId : null; J.bench = null; J.calib = null; J.preview = null; J.lab = null; J.leviers = null;
+      J.fiche = r.fiche; J.fid = null; J.savedId = improve ? J.savedId : null; J.target = improve ? J.target : null; J.bench = null; J.calib = null; J.preview = null; J.lab = null; J.leviers = null;
       Object.keys(J.fiche.ia || {}).forEach(k => { J.openWhy[k] = false; });
       status.textContent = 'Fiche remplie. Chaque case porte le badge « Proposé par l\'IA » : cliquez « Pourquoi ? » pour lire son raisonnement.';
       renderJevLibrary(); jChanged(true);

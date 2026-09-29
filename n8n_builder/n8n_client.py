@@ -7,6 +7,15 @@ from typing import Any
 
 import httpx
 
+# Repère de la carte d'origine laissée par le builder (voir generator.ORIGIN_MARK).
+ORIGIN_MARK = "n8n-export-builder:source"
+
+
+def _made_by_builder(w: dict[str, Any]) -> str | bool:
+    """« carte » : envoyé avec sa carte d'origine ; « ancien » : généré par une version du builder qui n'en avait pas."""
+    text = str(w.get("nodes") or "")
+    return "carte" if ORIGIN_MARK in text else ("ancien" if "Généré par N8N Export Builder" in text else False)
+
 KINDS = {
     "local": {"label": "Local", "hint": "http://localhost:5678",
               "help": "n8n sur votre poste (npx n8n ou Docker). Si le builder tourne dans Docker, utilisez http://host.docker.internal:5678."},
@@ -72,7 +81,8 @@ class N8nClient:
     async def workflows(self, limit: int = 100) -> list[dict[str, Any]]:
         data = await self._req("GET", "/workflows", params={"limit": limit})
         return [{"id": w.get("id"), "name": w.get("name"), "active": w.get("active"), "updatedAt": w.get("updatedAt"),
-                 "tags": [t.get("name") for t in w.get("tags") or []]} for w in data.get("data", [])]
+                 "tags": [t.get("name") for t in w.get("tags") or []],
+                 "builder": _made_by_builder(w)} for w in data.get("data", [])]
 
     async def get_workflow(self, wid: str) -> dict[str, Any]:
         return await self._req("GET", f"/workflows/{wid}")

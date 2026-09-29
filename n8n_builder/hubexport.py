@@ -171,7 +171,7 @@ def readme(s: dict[str, Any], base_url: str) -> str:
 
 def bundle(s: dict[str, Any], base_url: str, tests: list[dict[str, Any]] | None = None,
            fiche: dict[str, Any] | None = None) -> dict[str, Any]:
-    parts: dict[str, Any] = {"workflow-n8n.json": build(s), "SKILL.md": skill_md(s), "kit.json": kit(s, tests),
+    parts: dict[str, Any] = {"workflow-n8n.json": build(s, fiche=fiche), "SKILL.md": skill_md(s), "kit.json": kit(s, tests),
                              "LISEZMOI.md": readme(s, base_url)}
     if s["trigger"]["type"] == "webhook":
         parts["openapi.json"] = openapi(s, base_url)

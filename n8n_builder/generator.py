@@ -330,8 +330,24 @@ def note_text(s: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def build(s: dict[str, Any], credentials: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
-    """Construit le workflow n8n. credentials : {"jev"|"llm"|"webhook": {"id", "name"}} deja crees dans n8n."""
+ORIGIN_MARK = "n8n-export-builder:source"
+N_ORIGIN = "Source du builder (ne pas modifier)"
+
+
+def origin_note(s: dict[str, Any], fiche: dict[str, Any] | None = None) -> str:
+    """Carte d'origine : la spécification (et la fiche du Labo Jev) pour réimporter le workflow dans le builder.
+    Les cas de test n'y sont pas : ils peuvent contenir de vrais messages et restent dans le builder."""
+    data: dict[str, Any] = {"format": 1, "spec": s}
+    if fiche:
+        data["fiche"] = {**fiche, "tests": []}
+    return ("### Source du N8N Export Builder\nSert à réimporter ce workflow dans le builder (Importer, depuis n8n). "
+            f"Ne pas modifier.\n<!-- {ORIGIN_MARK} -->\n```json\n{json.dumps(data, ensure_ascii=False, separators=(',', ':'))}\n```")
+
+
+def build(s: dict[str, Any], credentials: dict[str, dict[str, str]] | None = None,
+          fiche: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Construit le workflow n8n. credentials : {"jev"|"llm"|"webhook": {"id", "name"}} deja crees dans n8n.
+    fiche : la fiche du Labo Jev d'origine, gardée dans la carte d'origine pour un réimport fidèle."""
     creds = credentials or {}
     wf = slug(s["name"])
     nodes: list[dict[str, Any]] = []
@@ -482,6 +498,8 @@ def build(s: dict[str, Any], credentials: dict[str, dict[str, str]] | None = Non
     top_y = min(n["position"][1] for n in nodes)
     node(N_NOTE, "n8n-nodes-base.stickyNote", 1,
          {"content": note_text(s), "height": height, "width": 560, "color": 5}, X - 40, top_y - height - 40)
+    node(N_ORIGIN, "n8n-nodes-base.stickyNote", 1,
+         {"content": origin_note(s, fiche), "height": 140, "width": 360, "color": 7}, X + 560, top_y - 180)
 
     return {
         "name": s["name"],

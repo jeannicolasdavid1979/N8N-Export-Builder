@@ -21,7 +21,7 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, assist, economy, fiches, generator, hubexport, jev, jevlab, skills, synthese, templates
+from . import __version__, assist, economy, fiches, generator, hubexport, importer, jev, jevlab, skills, synthese, templates
 from . import providers as P
 from .n8n_client import KINDS, N8nClient, N8nError, normalize_url
 from .spec import JEV_MODELS, JEV_PROVIDERS, JEV_URL, SpecError, question_vars, routes_of, uses_jev, validate
@@ -228,8 +228,8 @@ def create_app(data_dir: str | None = None, secret_key: str | None = None, passw
             raise HTTPException(404, "Modèle inconnu")
         return t
 
-    def build_response(s: dict[str, Any], n8n_base: str | None = None) -> dict[str, Any]:
-        wf = generator.build(s)
+    def build_response(s: dict[str, Any], n8n_base: str | None = None, fiche: dict[str, Any] | None = None) -> dict[str, Any]:
+        wf = generator.build(s, fiche=fiche)
         return {"spec": s, "workflow": wf, "routes": routes_of(s), "uses_jev": uses_jev(s), "variables": question_vars(s["questions"], s["decision"].get("verdicts")),
                 "curl": generator.curl_example(s, n8n_base or "https://VOTRE-N8N"), "warnings": warnings_for(s)}
 
@@ -291,7 +291,7 @@ def create_app(data_dir: str | None = None, secret_key: str | None = None, passw
     async def jev_compile(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
         f, s = jevlab.to_spec_or_error(body.get("fiche"))
         qmap = {q["id"]: {"valeurs": jevlab.allowed_values(q), "ops": jevlab.ops_for(q)} for q in f["questions"]}
-        return {"fiche": f, "reponses": qmap, **build_response(s, body.get("n8n_base"))}
+        return {"fiche": f, "reponses": qmap, **build_response(s, body.get("n8n_base"), f)}
 
     def assistant_model(body: dict[str, Any]) -> tuple[str, P.Provider, str]:
         pid = body.get("provider") or "openrouter"
@@ -431,6 +431,40 @@ def create_app(data_dir: str | None = None, secret_key: str | None = None, passw
         async with n8n(inst) as c:
             return {"workflows": await c.workflows(), "base": c.url}
 
+    @app.get("/api/n8n/{iid}/workflows/{wid}/import")
+    async def import_from_instance(iid: str, wid: str) -> dict[str, Any]:
+        inst = instance_or_404(iid)
+        async with n8n(inst) as c:
+            wf = await c.get_workflow(wid)
+        return {**importer.entry(wf, wid), "instance": iid}
+
+    @app.post("/api/import/analyse")
+    async def import_analyse(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        try:
+            wfs = importer.parse(body.get("workflow") if body.get("workflow") is not None else body.get("texte") or "")
+        except importer.ImportErreur as e:
+            raise HTTPException(400, str(e)) from e
+        return {"workflows": [importer.entry(w) for w in wfs]}
+
+    @app.post("/api/import/convertir")
+    async def import_convertir(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        pid, p, model = assistant_model(body)
+        if body.get("instance") and body.get("id"):
+            async with n8n(instance_or_404(str(body["instance"]))) as c:
+                wf = await c.get_workflow(str(body["id"]))
+        else:
+            try:
+                wfs = importer.parse(body.get("workflow") if body.get("workflow") is not None else body.get("texte") or "")
+                wf = wfs[int(body.get("index") or 0)]
+            except importer.ImportErreur as e:
+                raise HTTPException(400, str(e)) from e
+            except (IndexError, ValueError, TypeError) as e:
+                raise HTTPException(400, "Workflow introuvable dans le fichier.") from e
+        a = importer.analyse(wf)
+        r = await jevlab.llm_fill(pid, store.provider_key(pid), model, f"{importer.CONVERT_BRIEF} Nom : « {a['nom']} ».",
+                                  importer.summary(a), None, store.provider(pid).get("base_url") if p.base_editable else None)
+        return {**r, "analyse": a}
+
     async def ensure_credential(c: N8nClient, iid: str, slot: str, name: str, ctype: str, data: dict[str, Any],
                                 fingerprint: str) -> dict[str, str]:
         cur = store.n8n_credential(iid, slot)
@@ -443,7 +477,7 @@ def create_app(data_dir: str | None = None, secret_key: str | None = None, passw
     @app.post("/api/n8n/{iid}/push")
     async def push(iid: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
         inst = instance_or_404(iid)
-        s, _ = resolve(body)
+        s, fiche = resolve(body)
         creds: dict[str, dict[str, str]] = {}
         secret = None
         notes: list[str] = []
@@ -487,7 +521,7 @@ def create_app(data_dir: str | None = None, secret_key: str | None = None, passw
                     secret = secrets.token_urlsafe(24)
                     creds["webhook"] = await c.create_credential(f"Clé webhook {s['trigger']['path']} (builder)",
                                                                  "httpHeaderAuth", {"name": "X-Builder-Key", "value": secret})
-            wf = generator.build(s, creds)
+            wf = generator.build(s, creds, fiche)
             payload = generator.api_payload(wf)
             target = body.get("update_id")
             if target:

@@ -39,3 +39,7 @@ Les connexions relient des **noms** de nœuds : `{"A": {"main": [[{"node": "B", 
 - Juste après l'activation, le webhook peut répondre 404 une ou deux secondes : réessayer.
 - n8n 2.x demande Node 24 ; derrière Docker, l'hôte se joint par `http://host.docker.internal`.
 - `onError: continueRegularOutput` sur un appel HTTP laisse passer l'erreur dans `json.error` : le nœud suivant doit la traiter (le builder envoie alors vers la route de revue).
+
+## Workflows du builder dans n8n
+
+Chaque workflow envoyé par le builder porte une note « Source du builder (ne pas modifier) » : sa spécification, et la fiche du Labo Jev sans les cas de test. Elle permet de le réimporter à l'identique. La supprimer ne casse rien dans n8n ; le builder reconstruit alors l'automate depuis le code des nœuds « Préparer les données » et « Décision déterministe ». Un nœud ajouté ou un code modifié dans n8n est signalé à l'import : un nouvel envoi depuis le builder l'écraserait.

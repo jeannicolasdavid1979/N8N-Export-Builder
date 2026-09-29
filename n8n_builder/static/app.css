@@ -290,3 +290,7 @@ dialog.report { width: min(960px, 96vw); }
 .rep-sec p { margin: 0; line-height: 1.55; }
 .rep-q { background: var(--surface-2); border-radius: 10px; padding: 10px 12px; }
 .statbar .bar { margin-top: 3px; }
+
+/* Import depuis n8n */
+#dialog.wide { width: min(900px, 96vw); }
+#dialog.wide .dlg { max-height: 88vh; overflow: auto; }
