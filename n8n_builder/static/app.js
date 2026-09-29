@@ -290,11 +290,18 @@ function modelInput(pid, value, oninput) {
   const inp = h('input', { value: value || '', list: listId, placeholder: 'identifiant du modèle', oninput: e => oninput(e.target.value),
     onfocus: () => ensureModels(pid) });
   const dl = h('datalist', { id: listId });
-  const fill = () => { clear(dl); for (const m of (S.models[pid] || []).slice(0, 600)) dl.append(h('option', { value: m.id, label: m.name !== m.id ? m.name : '' })); };
+  const fill = () => {
+    clear(dl);
+    const favs = new Set((provider(pid) || {}).favorites || []);
+    const ms = [...(S.models[pid] || [])].sort((a, b) => (favs.has(b.id) ? 1 : 0) - (favs.has(a.id) ? 1 : 0));
+    for (const m of ms.slice(0, 600)) dl.append(h('option', { value: m.id, label: (favs.has(m.id) ? '★ ' : '') + (m.name !== m.id ? m.name : '') }));
+  };
   fill(); ensureModels(pid).then(fill);
   const pick = h('button', { type: 'button', class: 'small', text: '☰ Liste', title: 'Parcourir les modèles de ce fournisseur',
     onclick: () => openModelPicker(pid, m => { inp.value = m; oninput(m); }) });
-  return h('div', { class: 'model-in' }, inp, pick, dl);
+  const favs = (provider(pid) || {}).favorites || [];
+  const favSel = favs.length ? selectEl([['', '★ Mes favoris…'], ...favs.map(f => [f, f])], favs.includes(value) ? value : '', v => { if (v) { inp.value = v; oninput(v); } }, { class: 'fav-select', title: 'Modèles mis en favoris dans Modèles LLM' }) : null;
+  return h('div', { class: 'model-in' }, favSel, inp, pick, dl);
 }
 async function ensureModels(pid) {
   if (S.models[pid] && S.models[pid].length) return S.models[pid];
@@ -338,7 +345,11 @@ async function openModelPicker(pid, onPick) {
 // Jev : en direct chez TypeSafe ou par OpenRouter, avec la liste des modèles de chacun ------------------
 
 function jevKeyReady(jp) { const d = (S.data.jev_providers || {})[jp || 'typesafe']; return !!(d && (provider(d.key) || {}).configured); }
-function defaultJevProvider() { return jevKeyReady('typesafe') ? 'typesafe' : (jevKeyReady('openrouter') ? 'openrouter' : 'typesafe'); }
+function defaultJevProvider() {
+  const pref = (provider('typesafe') || {}).jev_via;
+  if (pref && jevKeyReady(pref)) return pref;
+  return jevKeyReady('typesafe') ? 'typesafe' : (jevKeyReady('openrouter') ? 'openrouter' : (pref || 'typesafe'));
+}
 function jevVia(jp, model, onChange) {
   const P = S.data.jev_providers || {};
   const cur = P[jp] ? jp : 'typesafe';
@@ -800,7 +811,9 @@ async function renderModels(main) {
     h('p', { class: 'muted', text: 'Clés chiffrées sur ce serveur, jamais renvoyées à l\'interface. Listes de modèles lues en direct chez chaque fournisseur.' }))));
   put(main, tuto('modeles', 'brancher des modèles', [
     ['Une clé OpenRouter suffit pour des centaines de modèles (Claude, GPT, Mimo, DeepSeek…). Collez-la dans la carte OpenRouter.'],
-    ['« Voir les modèles », filtrez, puis « Par défaut » : ce modèle sera proposé partout. Vous pouvez en choisir un autre dans chaque case LLM.'],
+    ['« Voir les modèles », filtrez, puis ☆ Favori sur les modèles que vous voulez avoir sous la main : ils apparaissent dans « ★ Mes favoris » de chaque case LLM. « Par défaut » choisit celui proposé d\'office.'],
+    ['Chaque workflow garde son propre modèle : un Mimo pour l\'entrée de l\'un, un Claude pour la rédaction de l\'autre.'],
+    ['Jev peut passer par votre clé OpenRouter : carte TypeSafe Jev, « Accès à Jev par défaut ».'],
     ['Collez la clé TypeSafe dans la carte Jev pour tester vos automates en vrai.'],
     ['Ollama local : aucune clé, indiquez seulement l\'adresse de votre machine.'],
   ]));
@@ -820,6 +833,7 @@ function providerCard(p, rank) {
     p.id === 'ollama_local' ? h('span', { class: 'badge info', text: 'Local, sans clé' }) : null,
     p.id === 'ollama_local' ? null : (p.configured ? h('span', { class: 'badge ok', text: 'Clé ' + (p.key_hint || 'enregistrée') }) : h('span', { class: 'badge', text: 'Non configuré' })),
     p.default_model ? h('span', { class: 'badge', text: 'Par défaut : ' + p.default_model }) : null,
+    (p.favorites || []).length ? h('span', { class: 'badge accent', text: `★ ${p.favorites.length} favori(s)` }) : null,
   ];
   const models = S.models[p.id];
   const openKey = 'open-' + p.id;
@@ -844,7 +858,15 @@ function providerCard(p, rank) {
         } }),
         p.key_hint ? h('button', { class: 'small danger', text: 'Retirer la clé', onclick: async () => { await api('PUT', `/api/providers/${p.id}`, { clear_key: true }); await loadState(); rerenderProvider(p.id); } }) : null))),
     p.key_url ? h('p', { class: 'small' }, h('a', { href: p.key_url, target: '_blank', rel: 'noopener', text: 'Obtenir une clé' })) : null,
-    p.error ? h('div', { class: 'notice err small', text: p.error }) : null,
+    p.kind === 'decision' ? h('div', { class: 'row' },
+      h('div', { class: 'field w240' }, lab('Accès à Jev par défaut', 'Pour les nouveaux automates. Chaque automate garde ensuite son propre choix (« Jev via », dans le Labo Jev ou le Labo n8n).'),
+        selectEl(Object.entries(S.data.jev_providers || {}).map(([k, d]) => [k, d.label + (jevKeyReady(k) ? '' : ' (clé manquante)')]), p.jev_via || 'typesafe', async v => {
+          await api('PUT', `/api/providers/${p.id}`, { jev_via: v }); await loadState(); rerenderProvider(p.id); toast('Accès à Jev par défaut : ' + S.data.jev_providers[v].label);
+        })),
+      p.jev_via === 'openrouter' ? (jevKeyReady('openrouter')
+        ? h('div', { class: 'notice ok small', text: 'Jev passe par votre clé OpenRouter : aucune clé TypeSafe n\'est nécessaire.' })
+        : h('div', { class: 'notice warn small', text: 'Enregistrez une clé OpenRouter (carte 1) : sans elle, Jev ne peut pas passer par OpenRouter.' })) : null) : null,
+    p.error && !(p.kind === 'decision' && p.jev_via === 'openrouter') ? h('div', { class: 'notice err small', text: p.error }) : null,
     h('p', { class: 'small faint', text: `${p.models_count} modèle(s) · liste lue ${fmtDate(p.refreshed_at)}` }),
     p.models_count ? modelsTable(p, openKey) : null);
   return card;
@@ -870,9 +892,16 @@ function modelsTable(p, openKey) {
         h('td', { class: 'small', text: p.id === 'ollama_local' ? (m.size_gb ? m.size_gb + ' Go' : '') : (m.context ? Math.round(m.context / 1000) + ' k' : '') }),
         hasPrice ? h('td', { class: 'small', text: price(m.input) }) : null,
         hasPrice ? h('td', { class: 'small', text: price(m.output) }) : null,
-        h('td', {}, m.id === p.default_model ? h('span', { class: 'badge accent', text: 'par défaut' }) : h('button', { class: 'small ghost', text: 'Par défaut', onclick: async () => {
-          await api('PUT', `/api/providers/${p.id}`, { default_model: m.id }); await loadState(); rerenderProvider(p.id);
-        } }))));
+        h('td', { class: 'fav-cell' },
+          h('button', { class: 'small ghost star' + ((p.favorites || []).includes(m.id) ? ' on' : ''), title: 'Favori : proposé en premier dans chaque case LLM',
+            text: (p.favorites || []).includes(m.id) ? '★ Favori' : '☆ Favori', onclick: async () => {
+              const fav = new Set(p.favorites || []);
+              if (fav.has(m.id)) fav.delete(m.id); else fav.add(m.id);
+              await api('PUT', `/api/providers/${p.id}`, { favorites: [...fav] }); await loadState(); S.openModels[p.id] = true; rerenderProvider(p.id);
+            } }),
+          m.id === p.default_model ? h('span', { class: 'badge accent', text: 'par défaut' }) : h('button', { class: 'small ghost', text: 'Par défaut', onclick: async () => {
+            await api('PUT', `/api/providers/${p.id}`, { default_model: m.id }); await loadState(); rerenderProvider(p.id);
+          } }))));
     }
   };
   const fill = async () => { await ensureModels(p.id); draw(); };
@@ -1712,7 +1741,7 @@ async function openHubExport(payload) {
 
 function info(text) {
   const tip = h('span', { class: 'info-tip', text });
-  const b = h('button', { class: 'info', type: 'button', title: text, 'aria-label': 'Explication', text: 'i',
+  const b = h('button', { class: 'ibtn', type: 'button', title: text, 'aria-label': 'Explication', text: 'i',
     onclick: e => { e.preventDefault(); e.stopPropagation(); tip.classList.toggle('open'); } });
   return h('span', { class: 'info-wrap' }, b, tip);
 }

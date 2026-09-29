@@ -108,6 +108,7 @@ def create_app(data_dir: str | None = None, secret_key: str | None = None, passw
         key = store.provider_key(p.id)
         return {**p.public(), "configured": bool(key) or p.key_optional, "key_hint": Store.hint(key),
                 "base_url": cfg.get("base_url") or p.base_url, "default_model": cfg.get("default_model"),
+                "favorites": cfg.get("favorites") or [], "jev_via": cfg.get("jev_via") or "typesafe",
                 "models_count": len(cfg.get("models") or []), "refreshed_at": cfg.get("refreshed_at"),
                 "error": cfg.get("error")}
 
@@ -148,6 +149,18 @@ def create_app(data_dir: str | None = None, secret_key: str | None = None, passw
             raise HTTPException(404, "Fournisseur inconnu")
         return p
 
+    def clean_favorites(v: Any) -> list[str] | None:
+        """Modeles preselectionnes d'un fournisseur : proposes en premier dans chaque case LLM."""
+        if v is None:
+            return None
+        if not isinstance(v, list):
+            raise HTTPException(400, "Favoris : liste d'identifiants attendue.")
+        out = []
+        for m in v:
+            if isinstance(m, str) and m.strip() and len(m) <= 120 and m.strip() not in out:
+                out.append(m.strip())
+        return out[:40]
+
     @app.put("/api/providers/{pid}")
     async def set_provider(pid: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
         p = provider_or_404(pid)
@@ -159,7 +172,9 @@ def create_app(data_dir: str | None = None, secret_key: str | None = None, passw
             if not base.startswith(("http://", "https://")):
                 raise HTTPException(400, "Adresse invalide.")
         store.set_provider(pid, key=body.get("key") or None, clear_key=bool(body.get("clear_key")),
-                           base_url=base, default_model=body.get("default_model"))
+                           base_url=base, default_model=body.get("default_model"),
+                           favorites=clean_favorites(body.get("favorites")),
+                           jev_via=body.get("jev_via") if body.get("jev_via") in JEV_PROVIDERS and p.kind == "decision" else None)
         return provider_view(p)
 
     @app.post("/api/providers/{pid}/refresh")

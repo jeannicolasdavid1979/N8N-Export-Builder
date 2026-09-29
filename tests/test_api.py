@@ -355,3 +355,15 @@ def test_static_files_are_revalidated_and_version_is_visible(tmp_path, mock):
     c, _ = make(tmp_path, mock)
     assert c.get("/static/app.js").headers["cache-control"] == "no-cache"
     assert c.get("/api/health").json()["version"] == __version__
+
+
+def test_provider_favorites_and_jev_default_access(tmp_path, mock):
+    c, _ = make(tmp_path, mock)
+    r = c.put("/api/providers/openrouter", json={"favorites": ["xiaomi/mimo-v2.6-flash", "anthropic/claude-sonnet-5.5", "xiaomi/mimo-v2.6-flash"]}).json()
+    assert r["favorites"] == ["xiaomi/mimo-v2.6-flash", "anthropic/claude-sonnet-5.5"]
+    assert c.put("/api/providers/openrouter", json={"favorites": "pas une liste"}).status_code == 400
+    assert c.put("/api/providers/typesafe", json={"jev_via": "openrouter"}).json()["jev_via"] == "openrouter"
+    # l'accès à Jev ne se règle que sur la carte de Jev
+    assert c.put("/api/providers/openrouter", json={"jev_via": "openrouter"}).json()["jev_via"] == "typesafe"
+    state = {p["id"]: p for p in c.get("/api/state").json()["providers"]}
+    assert state["openrouter"]["favorites"][0] == "xiaomi/mimo-v2.6-flash" and state["typesafe"]["jev_via"] == "openrouter"

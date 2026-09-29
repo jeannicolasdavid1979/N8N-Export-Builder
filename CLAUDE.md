@@ -26,3 +26,7 @@ Interface, documentation et messages de commit en français. Pas de tiret cadrat
 ## Banque de skills : à jour à chaque poussée
 
 `n8n_builder/skills/*/SKILL.md` est ce que les agents savent de Jev, de n8n et de l'outil. Toute modification qui change ce qu'un agent peut faire (route d'API, type de question, format de fiche, export) met à jour le skill concerné dans le même commit. `tests/test_skills.py` échoue si le skill du builder cite une route qui n'existe pas, ou si le Hub ne sait pas lire un skill.
+
+## Pédagogie des interfaces
+
+Toute nouvelle fonction s'accompagne de sa lecture par un novice : métaphore visuelle concrète (la voie ferrée, le wagon et son chargement), manipulation directe avec effet immédiat (bouger un seuil rejoue la décision), pas à pas qui montre ce que chaque étape change, divulgation progressive (bulles (i), tutoriels repliables, réglages experts en retrait). Proposer ce traitement à chaque ajout d'écran.

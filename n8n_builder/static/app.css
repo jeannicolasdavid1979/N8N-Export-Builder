@@ -173,7 +173,7 @@ dialog::backdrop { background: rgba(10, 12, 30, .45); }
 .tuto summary { color: var(--accent-text); }
 .tuto ol { margin: 8px 0 0; padding-left: 20px; } .tuto li { margin-bottom: 4px; }
 .info-wrap { position: relative; display: inline; }
-.info { display: inline-flex; align-items: center; justify-content: center; width: 17px; height: 17px; padding: 0; border-radius: 50%;
+.ibtn { display: inline-flex; align-items: center; justify-content: center; width: 17px; height: 17px; padding: 0; border-radius: 50%;
   font: italic 700 11px/1 Georgia, serif; background: var(--accent-soft); color: var(--accent-text); border: 1px solid var(--accent); vertical-align: middle; }
 .info-tip { display: none; font-weight: 400; font-size: 12.5px; color: var(--text); background: var(--info-soft); border-radius: 6px; padding: 6px 8px; margin: 4px 0; }
 .info-tip.open { display: block; }
@@ -256,3 +256,7 @@ dialog::backdrop { background: rgba(10, 12, 30, .45); }
 
 .model-in { display: flex; gap: 6px; } .model-in input { flex: 1; min-width: 0; }
 .pick-row { cursor: pointer; } .pick-row:hover td { background: var(--accent-soft); }
+
+.fav-cell { display: flex; gap: 4px; justify-content: flex-end; align-items: center; }
+.star.on { color: #d97706; }
+.model-in .fav-select { width: auto; max-width: 220px; }

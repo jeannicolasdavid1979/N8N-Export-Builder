@@ -12,7 +12,7 @@ Outil qui fabrique des **automates déterministes** : un workflow n8n où Jev ju
 
 - **Labo Jev** : un automate en cases (fiche). L'IA remplit et explique chaque case, l'humain ajuste ; essai, banc d'essai, calibrage des seuils.
 - **Labo n8n** : 50 modèles en trois niveaux, et tous les réglages (préparation en JavaScript, règles sur les valeurs brutes, sources, LLM).
-- **Modèles LLM** : clés chiffrées et modèles lus en direct (OpenRouter en tête, Ollama, Jev…).
+- **Modèles LLM** : clés chiffrées et modèles lus en direct (OpenRouter en tête, Ollama, Jev…). Chaque fournisseur a ses favoris (★), proposés en tête dans chaque case LLM ; chaque automate garde son propre modèle. La carte de Jev fixe l'accès par défaut des nouveaux automates (TypeSafe direct ou OpenRouter).
 - **Instances n8n** : n8n local, VPS ou Cloud.
 - **Banque de skills** : ces fichiers, à donner aux agents.
 - **Vue graphique** (bouton dans les deux labos) : l'automate en voie ferrée. Gare (entrée), ateliers (préparation, LLM d'entrée), cabine de l'aiguilleur (Jev, une jauge par question), aiguillage (règles), voies colorées vers chaque route (verte automatique, orange humain, rouge blocage). Une carte par module, et une console de test où le wagon roule jusqu'à sa voie. En « Pas à pas », le wagon s'arrête à chaque station et l'encart « Chargement du wagon » montre le contenu réel du message et ce que le nœud a ajouté (+), retiré (−) ou changé (~) ; la dernière étape montre ce que l'agent reçoit vraiment.
@@ -36,6 +36,7 @@ Authentification HTTP Basic si l'outil est protégé (mot de passe `N8NB_PASSWOR
 | `POST /api/jevlab/compile` `{"fiche"}` | fiche vers workflow ; `reponses` donne les valeurs possibles de chaque question |
 | `POST /api/jevlab/fill` `{"provider","model","description","fiche"?}` | l'IA remplit la fiche ; les cases `humain` sont gardées |
 | `POST /api/jevlab/field` `{"provider","model","fiche","path","consigne"?}` | l'IA propose une seule case (`questions.<id>.seuils`, `regles`, `tests`…) |
+| `PUT /api/providers/{pid}` `{"key"?,"default_model"?,"favorites"?,"jev_via"?}` | règle un fournisseur : `favorites` (liste de modèles préférés), `jev_via` (`typesafe` ou `openrouter`, sur la carte `typesafe` seulement) ; la clé n'est jamais renvoyée |
 | `POST /api/jev/ask` `{"state","questions","model"?,"provider"?}` | appel direct à Jev avec la clé enregistrée ; `provider` : `typesafe` (défaut) ou `openrouter` |
 | `POST /api/economy` `{"spec"|"fiche","calls"?}` | tokens et coût épargnés estimés |
 | `POST /api/n8n/{instance}/push` `{"spec"|"fiche","activate","create_credentials","update_id"?}` | envoi dans n8n : identifiants créés, workflow activé, adresse du webhook et clé X-Builder-Key (affichée une fois) |
