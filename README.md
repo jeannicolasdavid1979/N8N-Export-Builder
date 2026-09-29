@@ -33,6 +33,8 @@ Jev n'est pas qu'un juge oui/non. Le Labo Jev en expose six usages, tous posés 
 | Étiquettes multiples | toutes les étiquettes qui s'appliquent | étiquettes, seuil |
 | Pour chaque élément | oui/non par élément d'une liste | question, seuil ; verdict tous, certains ou aucun |
 
+Jev s'appelle **en direct chez TypeSafe ou par OpenRouter** (votre clé OpenRouter suffit) : le choix se fait dans chaque automate, avec la liste des modèles de chacun.
+
 Chaque question peut porter des **données de référence** (liste de concurrents, catégories autorisées…), citées dans la question entre accents graves.
 
 ## Pourquoi des automates plutôt qu'un LLM qui interprète
@@ -46,7 +48,7 @@ pip install -e .
 n8n-export-builder            # http://127.0.0.1:8790
 ```
 
-Sur un VPS : [docs/installation-vps.md](docs/installation-vps.md) (Docker, HTTPS par Caddy ou tunnel SSH).
+Sur un VPS : [docs/installation-vps.md](docs/installation-vps.md) (Docker, Coolify, HTTPS par Caddy ou tunnel SSH).
 
 | Variable | Rôle |
 |---|---|

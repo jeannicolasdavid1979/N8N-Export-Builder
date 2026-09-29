@@ -225,7 +225,8 @@ def validate_fiche(raw: Any) -> dict[str, Any]:
         tests.append({"entree": t["entree"], "attendu": _s(t.get("attendu"), 40), "attendus": attendus,
                       "note": _s(t.get("note"), 300)})
     f["tests"] = tests
-    f["modele"] = _s(raw.get("modele"), 40) or "jev-latest"
+    f["jev_fournisseur"] = raw.get("jev_fournisseur") if raw.get("jev_fournisseur") in ("typesafe", "openrouter") else "typesafe"
+    f["modele"] = _s(raw.get("modele"), 80) or ("~typesafe/jev-latest" if f["jev_fournisseur"] == "openrouter" else "jev-latest")
     f["declencheur"] = raw.get("declencheur") if raw.get("declencheur") in ("webhook", "manual") else "webhook"
     f["chemin"] = _s(raw.get("chemin"), 80)
     ia = raw.get("ia") if isinstance(raw.get("ia"), dict) else {}
@@ -341,7 +342,7 @@ def compile_fiche(f: dict[str, Any]) -> dict[str, Any]:
     raw = {
         "name": f["name"], "description": f["objectif"],
         "trigger": {"type": f["declencheur"], "path": f["chemin"] or slug(f["name"]), "auth": "header"},
-        "state": state, "model": f["modele"], "questions": questions, "decision": decision,
+        "state": state, "model": f["modele"], "jev_provider": f["jev_fournisseur"], "questions": questions, "decision": decision,
         "prepare_js": "// Listes reçues en entrée : une question Jev construite pour chaque liste.\n" + "".join(prep) if prep else "",
         "sample": f["exemple"] if not isinstance(f["exemple"], str) else {e["field"]: f["exemple"]},
         "hub": f["hub"], "route_notes": {r["id"]: r["consigne"] for r in f["resultats"] if r["consigne"]},

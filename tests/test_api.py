@@ -294,3 +294,57 @@ def test_saved_fiches(tmp_path, mock):
     fid = c.post("/api/jevlab/saved", json={"fiche": _fiche()}).json()["id"]
     assert c.get("/api/state").json()["mes_fiches"][0]["id"] == fid
     assert c.get(f"/api/jevlab/saved/{fid}").json()["fiche"]["name"] == "Tri des e-mails entrants"
+
+
+# Jev par OpenRouter -----------------------------------------------------------------------------------
+
+def test_jev_through_openrouter_uses_openrouter_key_and_url(tmp_path, mock):
+    route = mock.post("https://openrouter.ai/api/v1/systemone").respond(json={"model": "typesafe/jev-1.13", "answers": {
+        "u": {"type": "noul", "noul": 0.7}}, "usage": {"input_tokens": 10, "output_tokens": 2}})
+    c, _ = make(tmp_path, mock)
+    c.put("/api/providers/openrouter", json={"key": "sk-or-ABCDEF123456"})
+    r = c.post("/api/jev/ask", json={"provider": "openrouter", "state": "x", "questions": {"u": {"type": "noul", "instructions": "?"}}})
+    assert r.status_code == 200 and route.called
+    sent = route.calls[0].request
+    assert sent.headers["authorization"] == "Bearer sk-or-ABCDEF123456"
+    assert json.loads(sent.content)["model"] == "~typesafe/jev-latest"
+    # sans clé TypeSafe, le fournisseur direct refuse proprement
+    assert c.post("/api/jev/ask", json={"provider": "typesafe", "state": "x", "questions": {"u": {"type": "noul", "instructions": "?"}}}).status_code == 502
+
+
+def test_spec_maps_jev_models_between_providers():
+    from n8n_builder.spec import validate
+    raw = templates.get("hub-support-triage")["spec"]
+    s = validate({**raw, "jev_provider": "openrouter"})
+    assert s["jev_url"] == "https://openrouter.ai/api/v1/systemone" and s["model"] == "~typesafe/jev-latest"
+    s = validate({**raw, "jev_provider": "openrouter", "model": "jev-1.13.0"})
+    assert s["model"] == "typesafe/jev-1.13"
+    s = validate({**raw, "jev_provider": "typesafe", "model": "~typesafe/jev-latest", "jev_url": "https://openrouter.ai/api/v1/systemone"})
+    assert s["model"] == "jev-latest" and s["jev_url"] == "https://api.typesafe.ai/v1/systemone"
+
+
+def test_push_with_jev_via_openrouter_shares_one_credential(tmp_path, mock):
+    creds = mock.post(f"{N8N}/api/v1/credentials").mock(side_effect=lambda req: httpx.Response(
+        200, json={"id": "c" + str(len(creds.calls)), "name": json.loads(req.content)["name"]}))
+    create = mock.post(f"{N8N}/api/v1/workflows").respond(json={"id": "w1"})
+    c, _ = make(tmp_path, mock)
+    c.put("/api/providers/openrouter", json={"key": "sk-or-ABCDEF123456"})
+    iid = c.post("/api/n8n", json={"kind": "vps", "url": N8N, "key": "k"}).json()["id"]
+    spec = templates.get("hub-prospection-score")["spec"]  # Jev + un LLM OpenRouter sur la route « chaud »
+    spec["jev_provider"] = "openrouter"
+    spec["trigger"]["auth"] = "none"
+    r = c.post(f"/api/n8n/{iid}/push", json={"spec": spec}).json()
+    assert r["id"] == "w1"
+    bodies = [json.loads(x.request.content) for x in creds.calls]
+    assert [b["name"] for b in bodies] == ["LLM OpenRouter (builder)"]
+    nodes = {n["name"]: n for n in json.loads(create.calls[0].request.content)["nodes"]}
+    assert nodes["Jev (TypeSafe)"]["parameters"]["url"] == "https://openrouter.ai/api/v1/systemone"
+    assert nodes["Jev (TypeSafe)"]["credentials"]["httpBearerAuth"]["id"] == nodes["LLM de secours"]["credentials"]["httpBearerAuth"]["id"]
+
+
+def test_fiche_can_use_jev_through_openrouter(tmp_path, mock):
+    c, _ = make(tmp_path, mock)
+    f = _fiche()
+    f["jev_fournisseur"] = "openrouter"
+    r = c.post("/api/jevlab/compile", json={"fiche": f}).json()
+    assert r["spec"]["jev_provider"] == "openrouter" and r["spec"]["model"] == "~typesafe/jev-latest"

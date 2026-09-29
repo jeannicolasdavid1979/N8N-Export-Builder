@@ -21,6 +21,7 @@ Outil qui fabrique des **automates déterministes** : un workflow n8n où Jev ju
 
 Déclencheur → Préparer les données (code) → [LLM d'entrée, facultatif] → Jev → Décision (code, sans modèle) → Aiguillage → Route → [LLM de route, facultatif] → Réponse JSON `{route, raison, variables, extra, jev_modele}`.
 Si Jev ne répond pas, le cas part sur la route d'erreur (revue humaine), jamais sur une route d'action.
+Jev s'appelle en direct chez TypeSafe ou par OpenRouter : champ `jev_provider` d'une spécification (`typesafe` ou `openrouter`), `jev_fournisseur` d'une fiche. Avec OpenRouter, un seul identifiant n8n sert à Jev et aux LLM.
 
 ## API pour un agent
 
@@ -35,7 +36,7 @@ Authentification HTTP Basic si l'outil est protégé (mot de passe `N8NB_PASSWOR
 | `POST /api/jevlab/compile` `{"fiche"}` | fiche vers workflow ; `reponses` donne les valeurs possibles de chaque question |
 | `POST /api/jevlab/fill` `{"provider","model","description","fiche"?}` | l'IA remplit la fiche ; les cases `humain` sont gardées |
 | `POST /api/jevlab/field` `{"provider","model","fiche","path","consigne"?}` | l'IA propose une seule case (`questions.<id>.seuils`, `regles`, `tests`…) |
-| `POST /api/jev/ask` `{"state","questions","model"?}` | appel direct à Jev avec la clé enregistrée |
+| `POST /api/jev/ask` `{"state","questions","model"?,"provider"?}` | appel direct à Jev avec la clé enregistrée ; `provider` : `typesafe` (défaut) ou `openrouter` |
 | `POST /api/economy` `{"spec"|"fiche","calls"?}` | tokens et coût épargnés estimés |
 | `POST /api/n8n/{instance}/push` `{"spec"|"fiche","activate","create_credentials","update_id"?}` | envoi dans n8n : identifiants créés, workflow activé, adresse du webhook et clé X-Builder-Key (affichée une fois) |
 | `POST /api/export/hub` `{"spec"|"fiche","instance_id"|"base_url","format":"zip"?}` | OpenAPI, SKILL.md, kit et workflow pour une playlist du Hub |

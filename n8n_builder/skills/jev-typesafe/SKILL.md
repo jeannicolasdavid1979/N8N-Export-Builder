@@ -10,6 +10,11 @@ Jev est un modèle de décision, sorti le 15 septembre 2026. **Il ne rédige rie
 
 ## API
 
+Deux accès, même format de requête et de réponse :
+
+- **TypeSafe direct** : `POST https://api.typesafe.ai/v1/systemone`, clé TypeSafe, modèles `jev-latest`, `jev-preview`, `jev-1.13.0` ;
+- **OpenRouter** : `POST https://openrouter.ai/api/v1/systemone`, clé OpenRouter, modèles `~typesafe/jev-latest`, `typesafe/jev-1.13`. Pas de compte TypeSafe à ouvrir ; la réponse indique aussi `usage.cost`.
+
 ```
 POST https://api.typesafe.ai/v1/systemone
 Authorization: Bearer <clé>

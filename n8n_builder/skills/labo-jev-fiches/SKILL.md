@@ -22,6 +22,8 @@ Une fiche décrit un automate en langage courant. Elle se compile en workflow n8
   "par_defaut": "classer",
   "si_jev_indisponible": "a_relire",
   "tests": [{"entree": "…", "attendu": "traiter_vite", "attendus": {"action": "oui"}, "note": "…"}],
+  "jev_fournisseur": "openrouter",
+  "modele": "~typesafe/jev-latest",
   "llm_entree": {"provider": "openrouter", "model": "xiaomi/mimo-v2.6-flash", "system": "…"},
   "llms": [{"route": "traiter_vite", "provider": "openrouter", "model": "…", "system": "…"}],
   "ia": {"questions.action.seuils": {"origine": "humain", "pourquoi": ""}}

@@ -19,6 +19,15 @@ Le conteneur n'écoute que sur `127.0.0.1:8790`. Pour y accéder :
 - **HTTPS public** : un proxy inverse (Caddy, voir `deploy/Caddyfile`, ou Nginx, ou Traefik s'il sert déjà n8n) vers `127.0.0.1:8790` ;
 - **ou tunnel SSH**, sans rien ouvrir : `ssh -L 8790:127.0.0.1:8790 utilisateur@vps` puis `http://localhost:8790`.
 
+## Avec Coolify
+
+1. Nouvelle ressource, dépôt Git public ou privé, branche `claude/keen-noether-rm1low`, type de construction **Dockerfile**.
+2. Port exposé : `8790`. Domaine : celui de votre choix ; Coolify pose le HTTPS.
+3. Variables : `N8NB_PASSWORD` (long, aléatoire) et `N8NB_SECRET_KEY` (clé Fernet, voir plus haut). Sans mot de passe, le conteneur refuse de démarrer : c'est voulu.
+4. Stockage persistant : un volume monté sur `/data` (clés chiffrées, fiches, workflows). Sans lui, tout est perdu à chaque déploiement.
+5. Contrôle de santé : `GET /api/health` (sans mot de passe).
+6. Mise à jour : « Redeploy » après chaque poussée, ou le déploiement automatique sur la branche.
+
 ## Sans Docker
 
 ```bash

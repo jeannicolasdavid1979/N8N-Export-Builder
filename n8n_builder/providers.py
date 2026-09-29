@@ -35,7 +35,7 @@ class Provider:
 
 PROVIDERS: list[Provider] = [
     Provider("openrouter", "OpenRouter", "https://openrouter.ai/api/v1", key_url="https://openrouter.ai/keys",
-             offer="Des centaines de modèles d'une seule clé, prix affichés, modèles gratuits (suffixe :free).",
+             offer="Des centaines de modèles d'une seule clé, prix affichés, modèles gratuits (suffixe :free). Donne aussi accès à Jev.",
              models_public=True),
     Provider("ollama_cloud", "Ollama Cloud", "https://ollama.com/v1", key_url="https://ollama.com/settings/keys",
              offer="Grands modèles ouverts hébergés par Ollama (GLM, Kimi, DeepSeek, gpt-oss…).", models_public=True),
@@ -45,7 +45,8 @@ PROVIDERS: list[Provider] = [
     Provider("typesafe", "TypeSafe Jev", "https://api.typesafe.ai/v1", kind="decision",
              key_url="https://console.typesafe.ai",
              offer="Jev, modèle de décision System One : réponses typées et probabilités, sans texte généré. "
-                   "0,042 $ par million de tokens en entrée, sortie gratuite."),
+                   "0,042 $ par million de tokens en entrée, sortie gratuite. Aussi accessible avec une clé OpenRouter : "
+                   "choisissez « Jev via OpenRouter » dans l'automate."),
     Provider("anthropic", "Anthropic (Claude)", "https://api.anthropic.com/v1", auth="anthropic",
              key_url="https://console.anthropic.com/settings/keys", offer="Claude : Fable, Opus, Sonnet, Haiku."),
     Provider("openai", "OpenAI", "https://api.openai.com/v1", key_url="https://platform.openai.com/api-keys",

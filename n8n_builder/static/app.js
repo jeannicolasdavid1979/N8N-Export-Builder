@@ -117,6 +117,11 @@ function emptySpec(raw) {
   s.llms = [...(s.llm ? [s.llm] : []), ...(s.llms || [])];
   delete s.llm;
   s.entree_llm = s.entree_llm || null;
+  if (!s.jev_provider) {
+    s.jev_provider = defaultJevProvider();
+    const d = (S.data.jev_providers || {})[s.jev_provider];
+    if (d && !d.models.includes(s.model)) s.model = d.default;
+  }
   s.model = s.model || 'jev-latest';
   return s;
 }
@@ -253,7 +258,7 @@ function renderEditor() {
 
 function assistantCard() {
   const chat = chatProviders().filter(p => p.configured);
-  const st = S.assist = S.assist || { provider: (chat[0] || {}).id || 'openrouter', model: '', description: '', context: '' };
+  const st = S.assist = S.assist || { provider: (chat.find(x => !x.key_optional) || chat[0] || {}).id || 'openrouter', model: '', description: '', context: '' };
   if (!st.model) st.model = (provider(st.provider) || {}).default_model || '';
   const status = h('div', { class: 'small muted' });
   const run = async improve => {
@@ -287,12 +292,62 @@ function modelInput(pid, value, oninput) {
   const dl = h('datalist', { id: listId });
   const fill = () => { clear(dl); for (const m of (S.models[pid] || []).slice(0, 600)) dl.append(h('option', { value: m.id, label: m.name !== m.id ? m.name : '' })); };
   fill(); ensureModels(pid).then(fill);
-  return h('div', {}, inp, dl);
+  const pick = h('button', { type: 'button', class: 'small', text: '☰ Liste', title: 'Parcourir les modèles de ce fournisseur',
+    onclick: () => openModelPicker(pid, m => { inp.value = m; oninput(m); }) });
+  return h('div', { class: 'model-in' }, inp, pick, dl);
 }
 async function ensureModels(pid) {
-  if (S.models[pid]) return S.models[pid];
-  try { S.models[pid] = (await api('GET', `/api/providers/${pid}/models`)).models; } catch { S.models[pid] = []; }
+  if (S.models[pid] && S.models[pid].length) return S.models[pid];
+  try {
+    let ms = (await api('GET', `/api/providers/${pid}/models`)).models;
+    const p = provider(pid);
+    if (!ms.length && p && (p.models_public || p.configured)) ms = (await api('POST', `/api/providers/${pid}/refresh`)).models;
+    S.models[pid] = ms;
+  } catch { S.models[pid] = []; }
   return S.models[pid];
+}
+
+async function openModelPicker(pid, onPick) {
+  const dlg = $('#dialog');
+  const p = provider(pid) || { label: pid };
+  const body = h('div', { class: 'dlg stack' }, h('h2', { text: 'Modèles ' + p.label }), h('p', { class: 'muted small', text: 'Chargement de la liste…' }));
+  put(clear(dlg), body);
+  dlg.showModal();
+  const ms = await ensureModels(pid);
+  const search = h('input', { placeholder: 'Filtrer : claude, mimo, :free, gpt…', oninput: () => draw() });
+  const tbody = h('tbody');
+  const hasPrice = ms.some(m => m.input !== undefined);
+  const draw = () => {
+    clear(tbody);
+    const q = search.value.toLowerCase();
+    for (const m of ms.filter(m => !q || m.id.toLowerCase().includes(q) || String(m.name || '').toLowerCase().includes(q)).slice(0, 200)) {
+      put(tbody, h('tr', { class: 'pick-row', onclick: () => { onPick(m.id); dlg.close(); } },
+        h('td', {}, h('div', { class: 'mono', text: m.id }), m.name && m.name !== m.id ? h('div', { class: 'small faint', text: m.name }) : null),
+        hasPrice ? h('td', { class: 'small', text: m.input === undefined ? '' : price(m.input) + ' / ' + price(m.output) }) : null,
+        h('td', { class: 'small', text: m.context ? Math.round(m.context / 1000) + ' k' : (m.size_gb ? m.size_gb + ' Go' : '') })));
+    }
+  };
+  put(clear(body), h('h2', { text: 'Modèles ' + p.label }),
+    ms.length ? h('p', { class: 'small muted', text: `${ms.length} modèles, lus en direct. Cliquez une ligne pour la choisir.` + (hasPrice ? ' Prix : entrée / sortie par million de tokens.' : '') })
+      : h('div', { class: 'notice warn small' }, 'Aucune liste : ', h('a', { href: '#modeles', onclick: () => dlg.close(), text: 'renseignez la clé ou l\'adresse du fournisseur' }), '.'),
+    search, h('div', { class: 'models', style: 'max-height:420px' }, h('table', {}, tbody)),
+    h('div', { class: 'row end' }, h('button', { text: 'Fermer', onclick: () => dlg.close() })));
+  draw(); search.focus();
+}
+
+// Jev : en direct chez TypeSafe ou par OpenRouter, avec la liste des modèles de chacun ------------------
+
+function jevKeyReady(jp) { const d = (S.data.jev_providers || {})[jp || 'typesafe']; return !!(d && (provider(d.key) || {}).configured); }
+function defaultJevProvider() { return jevKeyReady('typesafe') ? 'typesafe' : (jevKeyReady('openrouter') ? 'openrouter' : 'typesafe'); }
+function jevVia(jp, model, onChange) {
+  const P = S.data.jev_providers || {};
+  const cur = P[jp] ? jp : 'typesafe';
+  const models = (P[cur] || {}).models || [];
+  return h('div', { class: 'row' },
+    h('div', { class: 'field w180' }, lab('Jev via', 'Jev s\'appelle en direct chez TypeSafe (clé TypeSafe) ou par OpenRouter (votre clé OpenRouter suffit). Même modèle, même format de réponse.'),
+      selectEl(Object.entries(P).map(([k, d]) => [k, d.label + (jevKeyReady(k) ? '' : ' (clé manquante)')]), cur, v => onChange(v, P[v].default))),
+    h('div', { class: 'field w180' }, lab('Modèle Jev', 'La version qui suit les nouveautés (latest) ou une version figée, à préférer quand vos seuils sont calibrés.'),
+      selectEl(models.includes(model) ? models : [model, ...models].filter(Boolean), model, v => onChange(cur, v))));
 }
 
 function triggerCard() {
@@ -336,7 +391,7 @@ function questionsCard() {
   const card = h('div', { class: 'card' },
     h('div', { class: 'section-title' }, h('h2', { text: `3. Questions à Jev (${ids.length})` }),
       h('div', { class: 'row' },
-        field('Modèle Jev', selectEl(S.data.jev_models, s.model, v => { s.model = v; changed(); }), 'w180'),
+        jevVia(s.jev_provider, s.model, (jp, m) => { s.jev_provider = jp; s.model = m; changed(true); }),
         h('button', { class: 'small', onclick: () => addQuestion('noul'), text: '+ Oui/non' }),
         h('button', { class: 'small', onclick: () => addQuestion('choice'), text: '+ Choix' }),
         h('button', { class: 'small', onclick: () => addQuestion('score'), text: '+ Score' }))));
@@ -557,13 +612,13 @@ function renderPreview() {
 function testCard() {
   const b = S.build, spec = b.spec;
   const usesJev = b.uses_jev;
-  const jevReady = (provider('typesafe') || {}).configured;
+  const jevReady = jevKeyReady(spec.jev_provider);
   const card = h('div', { class: 'card stack' }, h('h2', { text: 'Tester avec l\'exemple' }),
     h('p', { class: 'small muted', text: 'Le test exécute ici le code exact des nœuds n8n générés. ' + (usesJev ? 'Jev est appelé avec votre clé, ou remplacé par des réponses saisies à la main.' : 'Aucun appel à Jev : tout est calculé.') }),
     h('div', { class: 'row' },
-      usesJev ? h('button', { class: 'primary', disabled: !jevReady, title: jevReady ? '' : 'Clé TypeSafe à renseigner dans Modèles LLM', text: 'Tester avec Jev', onclick: () => runTest('jev') }) : h('button', { class: 'primary', text: 'Exécuter', onclick: () => runTest('code') }),
+      usesJev ? h('button', { class: 'primary', disabled: !jevReady, title: jevReady ? '' : 'Clé de Jev (TypeSafe ou OpenRouter) à renseigner dans Modèles LLM', text: 'Tester avec Jev', onclick: () => runTest('jev') }) : h('button', { class: 'primary', text: 'Exécuter', onclick: () => runTest('code') }),
       usesJev ? h('button', { text: 'Réponses manuelles', onclick: () => runTest('manual') }) : null,
-      usesJev && !jevReady ? h('a', { class: 'small', href: '#modeles', text: 'Ajouter la clé TypeSafe' }) : null));
+      usesJev && !jevReady ? h('a', { class: 'small', href: '#modeles', text: 'Ajouter une clé TypeSafe ou OpenRouter' }) : null));
   if (S.manual) put(card, manualForm());
   const t = S.test;
   if (t && t.error) put(card, h('div', { class: 'notice err', text: t.error }), t.fallback ? h('p', { class: 'small', text: `En production, ce cas partirait sur la route « ${t.fallback} ».` }) : null);
@@ -617,7 +672,7 @@ async function runTest(mode) {
   let res = null, t0 = performance.now();
   if (mode === 'jev') {
     if (!Object.keys(p.questions).length) res = { model: 'aucune question pour cette entrée', answers: {} };
-    else try { res = await api('POST', '/api/jev/ask', { state: p.state, questions: p.questions, model: spec.model }); }
+    else try { res = await api('POST', '/api/jev/ask', { state: p.state, questions: p.questions, model: spec.model, provider: spec.jev_provider }); }
     catch (e) { S.test = { error: e.message, fallback: spec.decision.error_route, prep: p }; return renderPreview(); }
   }
   finishTest(ctx, res, Math.round(performance.now() - t0));
@@ -1009,7 +1064,7 @@ async function proposeField(path) {
 
 function jAssist() {
   const chat = chatProviders().filter(p => p.configured);
-  const st = J.assist = J.assist || { provider: (chat[0] || {}).id, model: '', description: '', context: '' };
+  const st = J.assist = J.assist || { provider: (chat.find(x => !x.key_optional) || chat[0] || {}).id, model: '', description: '', context: '' };
   if (!st.model && st.provider) st.model = (provider(st.provider) || {}).default_model || '';
   return st;
 }
@@ -1027,6 +1082,10 @@ async function loadSavedFiche(id) {
 
 async function renderJevLab(main) {
   if (!J.fiche) { const f = await api('GET', '/api/jevlab/fiches/tri-emails'); J.fiche = f.fiche; J.fid = 'tri-emails'; }
+  if (!J.fiche.jev_fournisseur) {
+    J.fiche.jev_fournisseur = defaultJevProvider();
+    J.fiche.modele = ((S.data.jev_providers || {})[J.fiche.jev_fournisseur] || {}).default || J.fiche.modele;
+  }
   clear(main);
   put(main,
     h('div', { class: 'page-head' },
@@ -1172,6 +1231,7 @@ function jQuestionsCard() {
   const card = h('div', { class: 'card' },
     h('div', { class: 'section-title' }, h('h2', { text: `2. Questions posées à Jev (${f.questions.length})` }),
       selectEl([['', '+ Ajouter une question…'], ...Object.entries(QTYPES).map(([k, v]) => [k, v[0]])], '', v => { if (v) addJQuestion(v); })),
+    jevVia(f.jev_fournisseur, f.modele, (jp, m) => { f.jev_fournisseur = jp; f.modele = m; jChanged(true); }),
     h('p', { class: 'small muted' }, 'Toutes les questions partent en un seul appel à Jev. Une question = un seul jugement. ', info('Six types : oui/non, choix parmi des mots, score, choix dans une liste reçue, étiquettes multiples, question pour chaque élément. Le menu « Ajouter une question » les propose tous.')));
   f.questions.forEach((q, i) => put(card, jQuestionEl(q, i)));
   return card;
@@ -1380,7 +1440,7 @@ function jTestsCard() {
     list,
     h('div', { class: 'row' },
       h('button', { class: 'small', text: '+ Cas', onclick: () => { f.tests.push({ entree: '', attendu: '' }); touch('tests'); jChanged(true); } }),
-      h('button', { class: 'primary small', text: 'Tout tester avec Jev', disabled: !(provider('typesafe') || {}).configured || !f.tests.length, onclick: () => runBench(status) }),
+      h('button', { class: 'primary small', text: 'Tout tester avec Jev', disabled: !jevKeyReady(f.jev_fournisseur) || !f.tests.length, onclick: () => runBench(status) }),
       status,
       J.bench ? h('b', { text: `${J.bench.ok} / ${J.bench.rows.length} conformes` }) : null));
 }
@@ -1411,7 +1471,7 @@ async function jevDecide(input, manualAnswers) {
   const p = ctx.prep[0].json;
   let res;
   if (manualAnswers) res = { model: 'réponses manuelles', answers: manualAnswers };
-  else if (Object.keys(p.questions).length) res = await api('POST', '/api/jev/ask', { state: p.state, questions: p.questions, model: J.compiled.spec.model });
+  else if (Object.keys(p.questions).length) res = await api('POST', '/api/jev/ask', { state: p.state, questions: p.questions, model: J.compiled.spec.model, provider: J.compiled.spec.jev_provider });
   else res = { model: 'aucune question', answers: {} };
   const dec = runCode(ctx.decideCode, [{ json: res }], ctx.refs, {})[0].json;
   return { prep: p, jev: res, decision: dec };
@@ -1503,14 +1563,14 @@ function renderJevSide() {
 }
 
 function essaiCard() {
-  const jevReady = (provider('typesafe') || {}).configured;
+  const jevReady = jevKeyReady(J.fiche.jev_fournisseur);
   const input = textArea(J.essaiInput ?? JSON.stringify(J.fiche.exemple, null, 2), v => { J.essaiInput = v; }, { rows: 4, class: 'code' });
   const card = h('div', { class: 'card stack' }, h('h2', { text: 'Essai direct' }),
     h('p', { class: 'small muted', text: 'Un texte, ou un objet JSON. Le test exécute le code exact de l\'automate.' }), input,
     h('div', { class: 'row' },
       h('button', { class: 'primary', disabled: !jevReady || !J.compiled, text: 'Tester avec Jev', onclick: () => runEssai('jev') }),
       h('button', { disabled: !J.compiled, text: 'Simuler les réponses', onclick: () => runEssai('manual') }),
-      !jevReady ? h('a', { class: 'small', href: '#modeles', text: 'Ajouter la clé TypeSafe' }) : null));
+      !jevReady ? h('a', { class: 'small', href: '#modeles', text: 'Ajouter une clé TypeSafe ou OpenRouter' }) : null));
   const e = J.essai;
   if (!e) return card;
   if (e.error) return put(card, h('div', { class: 'notice err', text: e.error }), h('p', { class: 'small', text: `En production, ce cas irait vers « ${J.fiche.si_jev_indisponible || 'a_revoir'} ».` }));
@@ -1670,7 +1730,7 @@ function tuto(key, title, steps) {
 
 function llmSetup(get, set, routes, onChange) {
   const chat = chatProviders();
-  const def = () => { const p = chat.find(x => x.configured) || chat[0]; return { provider: p.id, model: p.default_model || '', system: '' }; };
+  const def = () => { const p = chat.find(x => x.configured && !x.key_optional) || provider('openrouter') || chat[0]; return { provider: p.id, model: p.default_model || '', system: '' }; };
   const card = h('div', { class: 'card stack' },
     h('h2', {}, 'LLM de l\'automate (facultatif) ', info('Un automate peut combiner plusieurs modèles : un LLM agentique en entrée qui met la demande au propre, Jev qui décide, et un LLM par route qui rédige. Chaque case choisit son propre modèle, par exemple via OpenRouter.')),
     h('div', { class: 'notice info small' }, 'Schéma : ', h('b', { text: 'LLM d\'entrée' }), ' (reformule) → ', h('b', { text: 'Jev' }), ' (décide) → ', h('b', { text: 'LLM de route' }), ' (rédige la réponse de cette route). Sans LLM, l\'automate reste 100 % déterministe.'));
@@ -1920,7 +1980,7 @@ function moduleCard(ctx) {
 
 function sceneConsole(ctx) {
   const { st } = ctx;
-  const jevReady = (provider('typesafe') || {}).configured;
+  const jevReady = jevKeyReady(ctx.build.spec.jev_provider);
   const input = textArea(st.inputText ?? JSON.stringify(ctx.build.spec.sample && !Array.isArray(ctx.build.spec.sample) ? ctx.build.spec.sample : (ctx.build.spec.sample || [])[0] || {}, null, 2), v => { st.inputText = v; }, { class: 'code', rows: 6 });
   const lines = st.steps ? st.steps.slice(0, st.stepIndex + 1).flatMap(s => s.trace) : (st.trace || ['En attente d\'un wagon.']);
   const log = h('div', { class: 'trace' }, lines.map(l => h('div', { text: l })));
@@ -1930,7 +1990,7 @@ function sceneConsole(ctx) {
     h('div', { class: 'row between' }, h('h2', { style: 'margin:0' }, 'Console de test ', info('Écrivez un message, lancez : le wagon part de la gare, passe la cabine de Jev et prend la voie choisie. En pas à pas, il s\'arrête à chaque station : l\'encart du chargement montre ce que le nœud a ajouté, retiré ou changé.')),
       h('div', { class: 'row' },
         h('label', { class: 'check', title: 'Le wagon s\'arrête à chaque station' }, h('input', { type: 'checkbox', checked: !!st.pas, onchange: e => { st.pas = e.target.checked; } }), 'Pas à pas'),
-        h('button', { class: 'primary', disabled: !jevReady || !ctx.build, title: jevReady ? '' : 'Clé TypeSafe à renseigner dans Modèles LLM', text: '▶ Lancer avec Jev', onclick: () => sceneRun(ctx, false) }),
+        h('button', { class: 'primary', disabled: !jevReady || !ctx.build, title: jevReady ? '' : 'Clé de Jev (TypeSafe ou OpenRouter) à renseigner dans Modèles LLM', text: '▶ Lancer avec Jev', onclick: () => sceneRun(ctx, false) }),
         h('button', { text: '▶ Lancer en simulation', title: 'Sans clé : les réponses de Jev viennent des curseurs de la cabine', onclick: () => sceneRun(ctx, true) }))),
     h('div', { class: 'console-grid' },
       h('div', {}, h('label', { text: 'Entrée (le wagon)' }), input),
@@ -2156,7 +2216,7 @@ async function sceneRun(ctx, simulate) {
         st.simAnswers = st.simAnswers && Object.keys(st.simAnswers).join() === qids.join() ? st.simAnswers : defaultAnswers(p.questions);
         res = { model: 'simulation', answers: clone(st.simAnswers) };
       } else if (!qids.length) res = { model: 'aucune question', answers: {} };
-      else res = await api('POST', '/api/jev/ask', { state: p.state, questions: p.questions, model: spec.model });
+      else res = await api('POST', '/api/jev/ask', { state: p.state, questions: p.questions, model: spec.model, provider: spec.jev_provider });
     }
   } catch (e) { err = e.message; }
   try {

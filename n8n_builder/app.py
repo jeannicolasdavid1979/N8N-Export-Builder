@@ -24,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__, assist, economy, fiches, generator, hubexport, jev, jevlab, skills, templates
 from . import providers as P
 from .n8n_client import KINDS, N8nClient, N8nError, normalize_url
-from .spec import JEV_MODELS, JEV_URL, SpecError, question_vars, routes_of, uses_jev, validate
+from .spec import JEV_MODELS, JEV_PROVIDERS, JEV_URL, SpecError, question_vars, routes_of, uses_jev, validate
 from .store import Store
 
 STATIC = Path(__file__).parent / "static"
@@ -36,7 +36,7 @@ def warnings_for(s: dict[str, Any]) -> list[str]:
         w.append("Webhook sans authentification : activez « Clé d'en-tête » avant de l'exposer sur Internet.")
     if uses_jev(s):
         w.append("Jev est entraîné surtout en anglais : testez les seuils sur une vingtaine de vrais cas français avant la production.")
-        if s["model"] == "jev-latest":
+        if s["model"] in ("jev-latest", "~typesafe/jev-latest"):
             w.append("jev-latest suit la dernière version : figez jev-1.13.0 si vos seuils sont calibrés sur cette version.")
     if s["llm"] and s["llm"]["model"] == "openrouter/auto":
         w.append("LLM de secours sur openrouter/auto : coût et comportement variables, choisissez un modèle précis pour la production.")
@@ -135,6 +135,7 @@ def create_app(data_dir: str | None = None, secret_key: str | None = None, passw
                 "workflows": [{"id": w["id"], "name": w["spec"].get("name"), "updated": w["updated"],
                                "pushes": w.get("pushes", [])[:3]} for w in store.workflows()],
                 "jev_models": list(JEV_MODELS),
+                "jev_providers": {k: {kk: v[kk] for kk in ("label", "models", "default", "key")} for k, v in JEV_PROVIDERS.items()},
                 "fiches": fiches.catalog(),
                 "mes_fiches": [{"id": f["id"], "name": f["fiche"].get("name"), "updated": f["updated"]} for f in store.fiches()]}
 
@@ -314,10 +315,17 @@ def create_app(data_dir: str | None = None, secret_key: str | None = None, passw
 
     @app.post("/api/jev/ask")
     async def jev_ask(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
-        # Adresse officielle, ou celle fixee par l'administrateur (N8NB_JEV_URL) : jamais une adresse venue de l'interface.
+        # Adresse officielle du fournisseur choisi, ou celle fixee par l'administrateur (N8NB_JEV_URL) :
+        # jamais une adresse venue de l'interface.
+        jp = JEV_PROVIDERS.get(body.get("provider") or "typesafe")
+        if not jp:
+            raise HTTPException(400, "Fournisseur de Jev inconnu.")
+        key = store.provider_key(jp["key"]) or ""
+        if not key:
+            raise jev.JevError(f"Clé {P.BY_ID[jp['key']].label} manquante : renseignez-la dans Modèles LLM.")
         async with http() as c:
-            return await jev.ask(store.provider_key("typesafe") or "", body.get("state"), body.get("questions") or {},
-                                 body.get("model") or "jev-latest", os.environ.get("N8NB_JEV_URL") or JEV_URL, client=c)
+            return await jev.ask(key, body.get("state"), body.get("questions") or {},
+                                 body.get("model") or jp["default"], os.environ.get("N8NB_JEV_URL") or jp["url"], client=c)
 
     @app.post("/api/assist")
     async def assist_route(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
@@ -414,15 +422,22 @@ def create_app(data_dir: str | None = None, secret_key: str | None = None, passw
                     return hashlib.sha256(v.encode()).hexdigest()[:16]
 
                 if uses_jev(s):
-                    key = store.provider_key("typesafe")
-                    if s["jev_url"] != JEV_URL:
-                        notes.append("Adresse Jev personnalisée : la clé TypeSafe enregistrée n'y est pas envoyée, "
+                    jp = JEV_PROVIDERS[s["jev_provider"]]
+                    key = store.provider_key(jp["key"])
+                    label = P.BY_ID[jp["key"]].label
+                    if s["jev_url"] != jp["url"]:
+                        notes.append(f"Adresse Jev personnalisée : la clé {label} enregistrée n'y est pas envoyée, "
                                      "choisissez l'identifiant dans n8n.")
+                    elif key and s["jev_provider"] == "openrouter":
+                        # Meme cle que les LLM OpenRouter : un seul identifiant n8n pour les deux usages.
+                        creds["llm:openrouter"] = await ensure_credential(c, iid, "llm:openrouter", "LLM OpenRouter (builder)",
+                                                                          "httpBearerAuth", {"token": key}, fp(key))
+                        creds["jev"] = creds["llm:openrouter"]
                     elif key:
                         creds["jev"] = await ensure_credential(c, iid, "jev", "TypeSafe Jev (builder)", "httpBearerAuth",
                                                                {"token": key}, fp(key))
                     else:
-                        notes.append("Clé TypeSafe absente : choisissez l'identifiant Jev dans n8n après l'envoi.")
+                        notes.append(f"Clé {label} absente : choisissez l'identifiant de Jev dans n8n après l'envoi.")
                 used = [l for l in (s["llms"] + ([s["entree_llm"]] if s.get("entree_llm") else []))]
                 for l in used:
                     pid = l["provider"]

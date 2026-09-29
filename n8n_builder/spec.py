@@ -16,6 +16,13 @@ from typing import Any
 
 JEV_URL = "https://api.typesafe.ai/v1/systemone"
 JEV_MODELS = ("jev-latest", "jev-preview", "jev-1.13.0")
+# Jev s'appelle en direct chez TypeSafe, ou par OpenRouter (meme format, cle OpenRouter).
+JEV_PROVIDERS = {
+    "typesafe": {"label": "TypeSafe direct", "url": JEV_URL, "models": list(JEV_MODELS), "default": "jev-latest", "key": "typesafe"},
+    "openrouter": {"label": "OpenRouter", "url": "https://openrouter.ai/api/v1/systemone",
+                   "models": ["~typesafe/jev-latest", "typesafe/jev-1.13"], "default": "~typesafe/jev-latest", "key": "openrouter"},
+}
+OFFICIAL_JEV_URLS = {p["url"] for p in JEV_PROVIDERS.values()}
 
 ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,47}$")
 ROUTE_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
@@ -220,10 +227,17 @@ def validate(raw: Any) -> dict[str, Any]:
         errors.append("prepare_js doit être du texte (code JavaScript).")
         s["prepare_js"] = ""
 
-    s["model"] = _str(spec.get("model")) or "jev-latest"
-    if not re.match(r"^[a-z0-9][a-z0-9._-]{0,60}$", s["model"]):
+    jp = spec.get("jev_provider") if spec.get("jev_provider") in JEV_PROVIDERS else "typesafe"
+    s["jev_provider"] = jp
+    model = _str(spec.get("model")) or JEV_PROVIDERS[jp]["default"]
+    other = [k for k in JEV_PROVIDERS if k != jp][0]
+    if model in JEV_PROVIDERS[other]["models"]:  # modele de l'autre fournisseur : equivalent le plus proche
+        model = JEV_PROVIDERS[jp]["models"][-1] if "1.13" in model else JEV_PROVIDERS[jp]["default"]
+    s["model"] = model
+    if not re.match(r"^[~a-z0-9][a-z0-9._/~-]{0,80}$", s["model"]):
         errors.append("Modèle Jev invalide.")
-    s["jev_url"] = _str(spec.get("jev_url")) or JEV_URL
+    url = _str(spec.get("jev_url"))
+    s["jev_url"] = JEV_PROVIDERS[jp]["url"] if not url or url in OFFICIAL_JEV_URLS else url
     if not s["jev_url"].startswith(("http://", "https://")):
         errors.append("Adresse de Jev invalide.")
 
