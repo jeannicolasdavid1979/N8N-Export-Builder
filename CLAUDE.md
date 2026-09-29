@@ -21,6 +21,7 @@ Interface, documentation et messages de commit en français. Pas de tiret cadrat
 
 - `n8n_builder/jevlab.py` : fiche du Labo Jev (six types de questions), validation en langage courant, compilation vers une spécification, remplissage par LLM global ou case par case. Une case marquée `humain` dans `ia` n'est jamais écrasée par l'IA.
 - `n8n_builder/fiches.py` : fiches types, chacune avec des cas de test.
+- Salle de réglage (`static/app.js`) : rejoue le nœud « Décision déterministe » en remplaçant seulement la ligne `const CFG = …;` avant `function flatten`. Ne pas changer cette forme sans adapter `reglageLab` ; `tests/test_jevlab.py` la vérifie.
 - `n8n_builder/hubexport.py` : OpenAPI, SKILL.md, kit (format 1) et workflow. Tout changement se vérifie avec les lecteurs du Hub (`agent_hub.studio.apis.preview`, `kitformat.parse_kit`, `skills.parse_skill_md`), voir `tests/test_jevlab.py`.
 
 ## Banque de skills : à jour à chaque poussée

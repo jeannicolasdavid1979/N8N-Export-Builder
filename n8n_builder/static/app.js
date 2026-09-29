@@ -1100,12 +1100,12 @@ function jAssist() {
 
 async function loadFicheType(fid) {
   const f = await api('GET', `/api/jevlab/fiches/${fid}`);
-  J.fiche = f.fiche; J.fid = fid; J.savedId = null; J.bench = null; J.calib = null; J.essai = null; J.scene = null;
+  J.fiche = f.fiche; J.fid = fid; J.savedId = null; J.bench = null; J.calib = null; J.essai = null; J.scene = null; J.preview = null; J.lab = null; J.leviers = null;
   renderJevLab($('#main'));
 }
 async function loadSavedFiche(id) {
   const f = await api('GET', `/api/jevlab/saved/${id}`);
-  J.fiche = f.fiche; J.savedId = id; J.fid = null; J.bench = null; J.calib = null; J.essai = null; J.scene = null;
+  J.fiche = f.fiche; J.savedId = id; J.fid = null; J.bench = null; J.calib = null; J.essai = null; J.scene = null; J.preview = null; J.lab = null; J.leviers = null;
   renderJevLab($('#main'));
 }
 
@@ -1147,6 +1147,9 @@ function jGraph() {
       touch(`questions.${qid}.seuils`);
     },
     redraw: () => renderScene(J.scene),
+    kindOf: voieKind,
+    fleet: sceneFleet(),
+    salle: salleCard,
   });
   sceneReplay(J.scene);
   renderScene(J.scene);
@@ -1225,7 +1228,7 @@ function jAssistCard() {
     status.textContent = 'L\'IA remplit les cases et explique ses choix…';
     try {
       const r = await api('POST', '/api/jevlab/fill', { provider: st.provider, model: st.model, description: st.description, context: st.context, fiche: improve ? J.fiche : null });
-      J.fiche = r.fiche; J.fid = null; J.savedId = improve ? J.savedId : null; J.bench = null; J.calib = null;
+      J.fiche = r.fiche; J.fid = null; J.savedId = improve ? J.savedId : null; J.bench = null; J.calib = null; J.preview = null; J.lab = null; J.leviers = null;
       Object.keys(J.fiche.ia || {}).forEach(k => { J.openWhy[k] = false; });
       status.textContent = 'Fiche remplie. Chaque case porte le badge « Proposé par l\'IA » : cliquez « Pourquoi ? » pour lire son raisonnement.';
       renderJevLibrary(); jChanged(true);
@@ -1453,6 +1456,7 @@ function jTestsCard() {
     put(list, h('div', { class: 'rule' },
       h('div', { class: 'row' }, h('span', { class: 'num', text: i + 1 }),
         res ? h('span', { class: 'badge ' + (res.ok ? 'ok' : 'err'), text: res.ok ? 'Conforme' : (res.error ? 'Erreur' : `Obtenu : ${res.route}`) }) : null,
+        t.source === 'ia' ? h('span', { class: 'badge accent', title: 'Cas inventé par l\'IA : relisez son résultat attendu', text: 'inventé par l\'IA' }) : null,
         h('span', { class: 'spacer' }),
         h('button', { class: 'ghost small', text: 'Essayer', onclick: () => { J.essaiInput = txt; runEssai('jev'); } }),
         h('button', { class: 'ghost danger', text: '×', onclick: () => { f.tests.splice(i, 1); touch('tests'); jChanged(true); } })),
@@ -1471,7 +1475,9 @@ function jTestsCard() {
       h('button', { class: 'small', text: '+ Cas', onclick: () => { f.tests.push({ entree: '', attendu: '' }); touch('tests'); jChanged(true); } }),
       h('button', { class: 'primary small', text: 'Tout tester avec Jev', disabled: !jevKeyReady(f.jev_fournisseur) || !f.tests.length, onclick: () => runBench(status) }),
       status,
-      J.bench ? h('b', { text: `${J.bench.ok} / ${J.bench.rows.length} conformes` }) : null));
+      J.bench ? h('b', { text: `${J.bench.ok} / ${J.bench.rows.length} conformes` }) : null),
+    h('div', { class: 'notice info small' }, '🎛 La ', h('b', { text: 'salle de réglage' }), ' (vue graphique) calcule sur ces cas des manettes toutes prêtes : dépenser le moins, ne rien laisser passer, le moins de travail humain. ',
+      h('button', { class: 'small', text: 'Ouvrir la salle de réglage', onclick: () => { J.view = 'graph'; J.scene = J.scene || { st: {} }; J.scene.st.panel = 'reglage'; renderJevLab($('#main')); } })));
 }
 
 // Exécution : le code exact des nœuds générés, dans le navigateur --------------------------------------
@@ -1537,10 +1543,11 @@ async function runBench(status) {
       rows.push({ ok: good, route: r.decision.route, details: verdicts, answers: r.jev.answers, test: t });
     } catch (e) { rows.push({ ok: false, error: e.message, details: e.message, test: t }); }
   }
-  J.bench = { rows, ok };
+  J.bench = { rows, ok, sig: benchSig() };
   J.calib = calibrate(rows);
+  J.lab = null; J.leviers = null;
   status.textContent = '';
-  renderJevEditor(); renderJevSide();
+  renderJevEditor(); renderJevSide(); jGraph();
 }
 
 // Calibrage : des seuils qui respectent les cas de test ---------------------------------------------------
@@ -1676,6 +1683,352 @@ function calibCard() {
         c.apply(); J.fiche.ia = J.fiche.ia || {}; J.fiche.ia[c.path] = { origine: 'calibrage', pourquoi: c.texte + '. ' + (c.note || '') };
         J.calib = J.calib.filter(x => x !== c); jChanged(true);
       } }) : null)));
+}
+
+// Salle de réglage : des manettes calculées sur les wagons d'essai déjà passés chez Jev ---------------------
+// Jev répond une fois par cas ; chaque réglage se rejoue ensuite sur ces réponses, avec le code exact de
+// l'aiguillage généré, sans nouvel appel. Rien ne s'applique sans l'accord de la personne.
+
+const VOIE_KIND = { auto: 'auto', humain: 'review', blocage: 'block' };
+const KIND_VOIE = { auto: 'auto', review: 'humain', block: 'blocage' };
+const PCT = Array.from({ length: 19 }, (_, i) => 5 + i * 5);
+
+function reglageOf() {
+  const f = J.fiche;
+  f.reglage = f.reglage || {};
+  if (typeof f.reglage.cout_erreur !== 'number') f.reglage.cout_erreur = 50;
+  if (typeof f.reglage.cout_revue !== 'number') f.reglage.cout_revue = 2;
+  f.reglage.voies = f.reglage.voies || {};
+  return f.reglage;
+}
+function voieKind(r) {
+  const v = ((J.fiche && J.fiche.reglage) || {}).voies || {};
+  return VOIE_KIND[v[r]] || routeKind(r);
+}
+function benchSig() { return J.compiled ? JSON.stringify([J.compiled.spec.questions, J.compiled.spec.prepare_js, J.compiled.spec.state]) : ''; }
+function snippet(e) { const t = typeof e === 'string' ? e : JSON.stringify(e); return t.length > 90 ? t.slice(0, 89) + '…' : t; }
+
+// Une manette par question : les seuils que l'outil a le droit de bouger.
+function knobsOf() {
+  const out = [];
+  for (const q of J.fiche.questions) {
+    if (q.type === 'noul') {
+      const vals = [...new Set([...PCT, q.seuil_non, q.seuil_oui])].sort((a, b) => a - b);
+      const cand = [];
+      for (const a of vals) for (const b of vals) if (a <= b) cand.push([a, b]);
+      out.push({ q, cand, get: () => [q.seuil_non, q.seuil_oui], set: v => { q.seuil_non = v[0]; q.seuil_oui = v[1]; },
+        patch: (vd, v) => { vd.non = v[0] / 100; vd.oui = v[1] / 100; }, texte: v => `${q.id} : NON jusqu'à ${v[0]} %, OUI dès ${v[1]} %` });
+    } else {
+      const key = ['etiquettes', 'pour_chaque'].includes(q.type) ? 'seuil' : 'confiance_min';
+      const cand = [...new Set([0, ...PCT, q[key]])].sort((a, b) => a - b);
+      out.push({ q, cand, get: () => q[key], set: v => { q[key] = v; },
+        patch: (vd, v) => { vd[key === 'seuil' ? 'seuil' : 'min'] = v / 100; },
+        texte: v => `${q.id} : ${key === 'seuil' ? 'seuil' : 'confiance minimale'} ${v} %` });
+    }
+  }
+  return out;
+}
+
+// Le banc rejouable : le code de l'aiguillage, dont seuls les seuils changent d'un essai à l'autre.
+function reglageLab() {
+  if (!J.bench || !J.compiled || J.errors) return null;
+  const node = J.compiled.workflow.nodes.find(n => n.name === NODE_DECIDE);
+  const code = node && node.parameters.jsCode;
+  const m = code && code.match(/const CFG = ([\s\S]*?);\n(?=\s*function flatten)/);
+  if (!m) return null;
+  const cfg = JSON.parse(m[1]);
+  const head = code.slice(0, m.index), tail = code.slice(m.index + m[0].length);
+  const key = JSON.stringify([benchSig(), head, { ...cfg, verdicts: null }, tail, reglageOf().voies, J.fiche.questions.map(q => [q.id, q.type])]);
+  if (J.lab && J.lab.key === key && J.lab.bench === J.bench) { J.lab.knobs = knobsOf(); return J.lab; }
+  const knobs = knobsOf();
+  const data = [];
+  J.bench.rows.forEach(r => {
+    if (!r.answers || r.error) return;
+    try { const input = jevInputOf(r.test.entree); data.push({ input, test: r.test, prepItems: runPrep(input).prep, res: { model: 'banc d\'essai (réponses déjà reçues)', answers: r.answers } }); } catch { /* cas illisible */ }
+  });
+  const memo = new Map();
+  const run = vals => {
+    const k = JSON.stringify(vals);
+    if (memo.has(k)) return memo.get(k);
+    const c = clone(cfg);
+    lab.knobs.forEach((kn, i) => { const vd = c.verdicts[kn.q.id]; if (vd) kn.patch(vd, vals[i]); });
+    const fn = new Function('$input', '$', '$getWorkflowStaticData', head + 'const CFG = ' + JSON.stringify(c) + ';\n' + tail);
+    const out = { routes: [], counts: {}, errors: 0, humains: 0, ok: 0, labeled: 0, n: data.length };
+    for (const d of data) {
+      let route;
+      try { route = fn({ all: () => [{ json: d.res }] }, () => ({ all: () => d.prepItems }), () => ({}))[0].json.route; } catch { route = '?'; }
+      out.routes.push(route);
+      const cnt = out.counts[route] = out.counts[route] || { n: 0, err: 0 };
+      cnt.n++;
+      const exp = d.test.attendu;
+      if (exp) { out.labeled++; if (route === exp) out.ok++; }
+      if (voieKind(route) === 'review') out.humains++;
+      else if (exp && route !== exp) { out.errors++; cnt.err++; }
+    }
+    memo.set(k, out);
+    return out;
+  };
+  const lab = { key, bench: J.bench, knobs, data, run, labeled: data.filter(d => d.test.attendu).length };
+  J.lab = lab; J.leviers = null;
+  return lab;
+}
+
+// Prix d'une rédaction par LLM sur une voie : 1 500 tokens lus, 400 écrits, au tarif du modèle s'il est connu.
+function llmUnitCosts(llms) {
+  const out = {};
+  for (const l of llms || []) {
+    const m = (S.models[l.provider] || []).find(x => x.id === l.model);
+    out[l.route] = m && m.input !== null && m.input !== undefined ? (1500 * m.input + 400 * (m.output || 0)) / 1e6 : 0.002;
+  }
+  return out;
+}
+function costOf(m, W, unit) {
+  let llm = 0;
+  for (const [r, c] of Object.entries(m.counts)) llm += (unit[r] || 0) * c.n;
+  return m.errors * W.erreur + m.humains * W.revue + llm;
+}
+
+// Descente manette par manette : pour chacune, la meilleure valeur, les autres fixées. Entre valeurs
+// équivalentes, celle du milieu : un seuil collé au dernier cas vu casse au premier cas nouveau.
+function optimize(lab, W, unit, start) {
+  const vals = start.map(v => clone(v));
+  for (let pass = 0; pass < 3; pass++) {
+    let moved = false;
+    lab.knobs.forEach((kn, i) => {
+      let best = Infinity, opt = [];
+      for (const c of kn.cand) {
+        const v = vals.slice(); v[i] = c;
+        const s = costOf(lab.run(v), W, unit);
+        if (s < best - 1e-9) { best = s; opt = [c]; } else if (s <= best + 1e-9) opt.push(c);
+      }
+      if (opt.length === kn.cand.length) return; // cette manette ne change rien sur ces cas : on n'y touche pas
+      const pick = opt[Math.floor((opt.length - 1) / 2)];
+      if (JSON.stringify(pick) !== JSON.stringify(vals[i])) { vals[i] = clone(pick); moved = true; }
+    });
+    if (!moved) break;
+  }
+  return vals;
+}
+
+function computeLevers(lab) {
+  const rg = reglageOf();
+  const baseVals = J.preview ? J.preview.backup.vals : lab.knobs.map(k => k.get());
+  const llms = J.preview ? J.preview.backup.llms : (J.fiche.llms || []);
+  const unit = llmUnitCosts(llms);
+  const W = { erreur: rg.cout_erreur, revue: rg.cout_revue };
+  const key = JSON.stringify([lab.key, baseVals, W, llms, Object.keys(unit).map(r => unit[r])]);
+  if (J.leviers && J.leviers.key === key) return J.leviers;
+  const mk = (id, icon, nom, texte, vals, extra = {}) => ({ id, icon, nom, texte, vals, m: lab.run(vals), ...extra });
+  const eco = optimize(lab, W, unit, baseVals);
+  const list = [
+    mk('actuel', '📍', 'Réglage actuel', 'Vos seuils tels qu\'ils sont, pour comparer.', baseVals),
+    mk('econome', '💶', 'Dépenser le moins', 'Le réglage qui coûte le moins au total avec vos prix, erreurs et temps humain compris.', eco),
+    mk('prudent', '🛡', 'Ne rien laisser passer', 'Une erreur compte cent fois plus que son prix : davantage de wagons passent par un humain, le moins d\'erreurs possible.',
+      optimize(lab, { erreur: W.erreur * 100, revue: W.revue }, unit, baseVals)),
+    mk('autonome', '⚡', 'Le moins de travail humain', 'Un passage humain compte autant qu\'une erreur : l\'automate décide seul le plus souvent possible, au prix de quelques erreurs.',
+      optimize(lab, { erreur: W.erreur, revue: Math.max(W.revue, W.erreur) }, unit, baseVals)),
+  ];
+  if (llms.length) list.push(mk('rapide', '🚄', 'Ultra rapide, sans LLM de rédaction',
+    'Les seuils de « Dépenser le moins », sans LLM sur les voies : la réponse part en une fraction de seconde au lieu de plusieurs secondes, et l\'agent rédige lui-même.'
+    + (J.fiche.llm_entree ? ' Le LLM d\'entrée reste : le retirer changerait ce que lit Jev, il faudrait refaire passer les wagons.' : ''), eco, { dropLlm: true }));
+  list.forEach((l, i) => {
+    l.cout = costOf(l.m, W, l.dropLlm ? {} : unit);
+    const twin = list.slice(0, i).find(o => JSON.stringify(o.vals) === JSON.stringify(l.vals) && !!o.dropLlm === !!l.dropLlm);
+    if (twin) l.same = twin.nom;
+  });
+  J.leviers = { key, list, base: lab.run(baseVals), baseVals, unit, W };
+  return J.leviers;
+}
+
+function previewLever(lab, l) {
+  const f = J.fiche;
+  if (!J.preview) J.preview = { backup: { vals: lab.knobs.map(k => clone(k.get())), llms: clone(f.llms || []) } };
+  Object.assign(J.preview, { id: l.id, nom: l.nom, vals: clone(l.vals), dropLlm: !!l.dropLlm });
+  lab.knobs.forEach((k, i) => k.set(clone(l.vals[i])));
+  f.llms = l.dropLlm ? [] : clone(J.preview.backup.llms);
+  J.scene = J.scene || { st: {} };
+  J.scene.st.panel = 'reglage';
+  jChanged(true);
+}
+function revertPreview(lab) {
+  if (!J.preview) return;
+  const b = J.preview.backup;
+  lab.knobs.forEach((k, i) => k.set(clone(b.vals[i])));
+  J.fiche.llms = clone(b.llms);
+  J.preview = null;
+  jChanged(true);
+}
+function keepPreview(lab) {
+  const p = J.preview, b = p.backup;
+  const before = lab.run(b.vals), after = lab.run(p.vals);
+  const why = `Levier « ${p.nom} » choisi dans la salle de réglage, sur ${after.n} wagons d'essai : erreurs ${before.errors} puis ${after.errors}, passages humains ${before.humains} puis ${after.humains}.`;
+  J.fiche.ia = J.fiche.ia || {};
+  lab.knobs.forEach((k, i) => {
+    if (JSON.stringify(b.vals[i]) !== JSON.stringify(p.vals[i])) J.fiche.ia[`questions.${k.q.id}.seuils`] = { origine: 'humain', pourquoi: `${why} ${k.texte(p.vals[i])}.` };
+  });
+  J.preview = null; J.leviers = null;
+  jChanged(true);
+  toast('Réglage gardé. Enregistrez la fiche pour le conserver.');
+}
+
+async function addIaCases(status) {
+  const st = jAssist();
+  if (!st.provider) return toast('Configurez un fournisseur de discussion dans Modèles LLM.', true);
+  const f = J.fiche;
+  const before = new Set((f.tests || []).map(t => JSON.stringify(t.entree)));
+  status.textContent = 'L\'IA invente des cas, dont des cas limites…';
+  try {
+    const r = await api('POST', '/api/jevlab/field', { provider: st.provider, model: st.model, fiche: f, path: 'tests',
+      consigne: 'Propose uniquement 20 cas nouveaux, différents des cas existants (ceux-ci seront gardés). Quelques cas nets, et surtout des cas limites, difficiles à trancher, écrits comme de vrais messages. Chaque cas indique son résultat attendu.' });
+    const add = (r.fiche.tests || []).filter(t => !before.has(JSON.stringify(t.entree))).map(t => ({ ...t, source: 'ia' }));
+    f.tests = [...(f.tests || []), ...add].slice(0, 100);
+    J.bench = null; J.lab = null; J.leviers = null;
+    status.textContent = '';
+    toast(`${add.length} cas inventés par l'IA ajoutés au banc. Relisez leur résultat attendu, puis faites passer les wagons.`);
+    jChanged(true);
+  } catch (e) { status.textContent = ''; toast(e.message + (e.errors ? ' : ' + e.errors.join(' ; ') : ''), true); }
+}
+
+function chip(icon, text, cls = '') { return h('span', { class: 'chip ' + cls }, h('b', { text: icon }), ' ', text); }
+
+function leverCard(lab, L, l) {
+  const on = J.preview ? J.preview.id === l.id : l.id === 'actuel';
+  const m = l.m;
+  const moved = l.id === 'actuel' ? 0 : m.routes.filter((r, i) => r !== L.base.routes[i]).length;
+  return h('div', { class: 'lever' + (on ? ' on' : '') },
+    h('div', { class: 'row between' }, h('b', { text: l.icon + ' ' + l.nom }), on ? h('span', { class: 'badge accent', text: 'sur la voie' }) : null),
+    h('div', { class: 'small muted', text: l.texte }),
+    h('div', { class: 'chips' },
+      chip('✓', `${m.ok} / ${m.labeled} conformes`), chip('✗', `${m.errors} erreur(s)`, m.errors ? 'bad' : 'good'),
+      chip('👤', `${m.humains} passage(s) humain(s)`), chip('€', `≈ ${Math.round(l.cout / Math.max(1, m.n) * 1000).toLocaleString('fr-FR')} € pour 1 000 wagons`)),
+    l.same ? h('div', { class: 'small faint', text: `Même réglage que « ${l.same} ».` })
+      : (l.id !== 'actuel' ? h('div', { class: 'small faint', text: moved ? `${moved} wagon(s) changent de voie par rapport au réglage actuel.` : 'Aucun wagon ne change de voie.' }) : null),
+    on ? null : h('button', { class: 'small' + (l.id === 'actuel' ? '' : ' primary'), text: l.id === 'actuel' ? '↩ Revenir au réglage actuel' : 'Essayer sur la voie',
+      onclick: () => (l.id === 'actuel' ? revertPreview(lab) : previewLever(lab, l)) }));
+}
+
+function previewBox(lab, L) {
+  const p = J.preview;
+  const after = lab.run(p.vals), before = L.base;
+  const changed = after.routes.map((r, i) => ({ r, b: before.routes[i], d: lab.data[i] })).filter(x => x.r !== x.b);
+  return h('div', { class: 'notice info stack' },
+    h('div', {}, 'Aperçu : ', h('b', { text: p.nom }), `. Les compteurs sur les voies montrent où iraient les ${after.n} wagons.`),
+    changed.length ? h('div', { class: 'stack' }, h('b', { class: 'small', text: `${changed.length} wagon(s) changent de voie :` }),
+      changed.slice(0, 5).map(x => {
+        const exp = x.d.test.attendu;
+        return h('div', { class: 'moved' },
+          h('div', { class: 'small', text: '« ' + snippet(x.d.test.entree) + ' »' }),
+          h('div', { class: 'small' }, `avant : ${x.b}, après : `, h('b', { text: x.r }), ' ',
+            exp ? h('span', { class: 'badge ' + (x.r === exp ? 'ok' : 'err'), text: x.r === exp ? 'bonne voie' : `attendu : ${exp}` }) : null),
+          h('button', { class: 'ghost small', text: '▶ Voir ce wagon rouler', onclick: () => scenePlay(J.scene, x.d.input, x.d.res) }));
+      }),
+      changed.length > 5 ? h('div', { class: 'small faint', text: `et ${changed.length - 5} autre(s).` }) : null)
+      : h('div', { class: 'small', text: 'Aucun wagon ne change de voie avec ce réglage.' }),
+    h('div', { class: 'row' },
+      h('button', { class: 'primary small', text: '✓ Garder ce réglage', onclick: () => keepPreview(lab) }),
+      h('button', { class: 'small', text: '↩ Revenir', onclick: () => revertPreview(lab) })));
+}
+
+function equilibreManette(lab, L) {
+  const rg = reglageOf();
+  const pos = J.equilibre ?? 50;
+  const weights = p => ({ erreur: rg.cout_erreur * 10 ** ((p - 50) / 50), revue: rg.cout_revue });
+  const out = h('div', { class: 'small muted' });
+  const show = p => {
+    const m = lab.run(optimize(lab, weights(p), L.unit, L.baseVals));
+    out.textContent = `À cette position : ${m.errors} erreur(s), ${m.humains} passage(s) humain(s). Relâchez pour voir les wagons sur la voie.`;
+  };
+  const live = debounce(show, 120);
+  return h('div', { class: 'lever' + (J.preview && J.preview.id === 'equilibre' ? ' on' : '') },
+    h('b', { text: '🎚 Mon équilibre' }),
+    h('div', { class: 'small muted', text: 'Entre les deux, à vous de placer le curseur : à gauche l\'automate décide davantage seul, à droite il envoie davantage à un humain.' }),
+    h('div', { class: 'row' }, h('span', { class: 'small', text: 'Autonomie' }),
+      h('input', { type: 'range', min: 0, max: 100, step: 5, value: pos, style: 'flex:1', 'aria-label': 'Équilibre entre autonomie et prudence',
+        oninput: e => { J.equilibre = Number(e.target.value); live(J.equilibre); },
+        onchange: e => {
+          const p = Number(e.target.value);
+          previewLever(lab, { id: 'equilibre', nom: `Mon équilibre (${p} sur 100)`, vals: optimize(lab, weights(p), L.unit, L.baseVals) });
+        } }),
+      h('span', { class: 'small', text: 'Prudence' })),
+    out);
+}
+
+function salleCard() {
+  const f = J.fiche, rg = reglageOf();
+  const card = h('div', { class: 'mod-card stack salle' });
+  put(card, h('h2', {}, '🎛 Salle de réglage ', info('L\'outil essaie des milliers de réglages sur vos wagons d\'essai et vous propose des manettes. Vous voyez leur effet sur la voie ferrée ; rien ne change sans votre accord.')),
+    tuto('salle', 'trouver le bon réglage', [
+      ['Faites passer les ', h('b', { text: 'wagons d\'essai' }), ' (les cas du banc d\'essai) : chacun passe une fois chez Jev. Ses réponses sont gardées, les réglages se rejouent ensuite gratuitement.'],
+      ['Dites ce que coûte ', h('b', { text: 'une erreur' }), ' et ce que coûte ', h('b', { text: 'un passage par un humain' }), ', en euros. C\'est ainsi que l\'outil comprend ce qui compte pour vous.'],
+      ['L\'outil propose des ', h('b', { text: 'manettes' }), '. « Essayer sur la voie » montre où vont les wagons : le compteur au-dessus de chaque voie, ✗ pour les erreurs.'],
+      ['Rien ne change sans vous : « Garder ce réglage » l\'adopte, « Revenir » annule.'],
+    ]));
+
+  // 1. Les wagons d'essai
+  const tests = f.tests || [];
+  const labeled = tests.filter(t => t.attendu).length, byIa = tests.filter(t => t.source === 'ia').length;
+  const status = h('div', { class: 'small muted' });
+  const jevReady = jevKeyReady(f.jev_fournisseur);
+  const chatReady = chatProviders().some(p => p.configured);
+  const stale = J.bench && J.bench.sig !== benchSig();
+  put(card, h('h3', { text: '1. Les wagons d\'essai' }),
+    h('p', { class: 'small', text: `${tests.length} cas dans le banc d'essai, dont ${labeled} avec le résultat attendu${byIa ? ` et ${byIa} inventé${byIa > 1 ? 's' : ''} par l'IA` : ''}.` }),
+    h('div', { class: 'row' },
+      h('button', { class: 'small' + (J.bench && !stale ? '' : ' primary'), disabled: !jevReady || !tests.length || !J.compiled,
+        text: `▶ Faire passer les ${tests.length} wagons chez Jev`, onclick: () => runBench(status) }),
+      chatReady ? h('button', { class: 'small', text: '✦ 20 cas inventés par l\'IA', title: 'Pour couvrir les cas bizarres. Pour régler finement, rien ne vaut de vrais messages.', onclick: () => addIaCases(status) }) : null),
+    !jevReady ? h('a', { class: 'small', href: '#modeles', text: 'Renseignez une clé de Jev (TypeSafe ou OpenRouter)' }) : null,
+    status,
+    J.bench ? h('p', { class: 'small muted', text: `${J.bench.rows.filter(r => r.answers).length} wagons passés. Chaque réglage se rejoue sur leurs réponses, sans nouvel appel à Jev.` }) : null,
+    stale ? h('div', { class: 'notice warn small', text: 'Les questions ont changé depuis le passage des wagons : faites-les repasser.' }) : null,
+    J.bench && labeled < 20 ? h('div', { class: 'notice warn small', text: `Avec ${labeled} cas étiquetés, le hasard pèse lourd : un écart d'une ou deux erreurs entre deux manettes ne prouve rien. Visez 30 cas ou plus, de préférence de vrais messages.` }) : null);
+
+  // 2. Le prix des erreurs
+  const eur = (val, on) => h('input', { type: 'number', min: 0, step: 'any', value: val, style: 'width:90px',
+    onchange: e => { on(Math.max(0, Number(e.target.value) || 0)); J.leviers = null; jGraph(); } });
+  put(card, h('h3', { text: '2. Combien coûte une erreur ?' }),
+    h('div', { class: 'row' }, h('span', { class: 'small', style: 'flex:1', text: 'Un wagon envoyé seul sur la mauvaise voie' }), eur(rg.cout_erreur, v => { rg.cout_erreur = v; }), h('span', { text: '€' })),
+    h('div', { class: 'row' }, h('span', { class: 'small', style: 'flex:1', text: 'Un wagon vérifié par un humain (son temps)' }), eur(rg.cout_revue, v => { rg.cout_revue = v; }), h('span', { text: '€' })),
+    h('details', {}, h('summary', { class: 'small', text: 'Nature de chaque voie' }),
+      h('p', { class: 'small muted', text: 'Une voie « Humain » n\'est jamais une erreur : un humain vérifie. Une erreur, c\'est un wagon parti seul sur une autre voie que celle attendue.' }),
+      h('div', { class: 'stack' }, f.resultats.map(r => h('div', { class: 'row' }, h('span', { class: 'small', style: 'flex:1', text: r.label || r.id }),
+        selectEl([['auto', 'Automatique'], ['humain', 'Humain'], ['blocage', 'Blocage']], KIND_VOIE[voieKind(r.id)], v => { rg.voies[r.id] = v; J.leviers = null; jGraph(); }))))));
+
+  // 3. Les manettes
+  put(card, h('h3', { text: '3. Les manettes proposées' }));
+  const lab = J.bench && !stale ? reglageLab() : null;
+  if (!J.bench || stale) return put(card, h('p', { class: 'small muted', text: 'Faites passer les wagons d\'abord : les manettes se calculent sur les réponses de Jev.' }));
+  if (!lab || !lab.knobs.length) return put(card, h('p', { class: 'small muted', text: 'Rien à régler : cet automate n\'a pas de seuil.' }));
+  if (lab.labeled < 5) return put(card, h('div', { class: 'notice warn small', text: 'Indiquez le résultat attendu d\'au moins 5 cas : sans lui, l\'outil ne peut pas compter les erreurs, et pousserait tout vers l\'automatique.' }));
+  const L = computeLevers(lab);
+  if (J.preview) put(card, previewBox(lab, L));
+  L.list.forEach(l => put(card, leverCard(lab, L, l)));
+  put(card, equilibreManette(lab, L),
+    h('p', { class: 'small faint', text: 'Les manettes sont calculées sur vos wagons d\'essai, pas sur l\'avenir : gardez une voie humaine tant que les vrais messages n\'ont pas confirmé le réglage.' }));
+  return card;
+}
+
+// Les wagons du banc sur la voie : combien arrivent sur chaque voie avec le réglage affiché.
+function sceneFleet() {
+  const lab = J.bench && J.bench.sig === benchSig() ? reglageLab() : null;
+  if (!lab || !lab.data.length) return null;
+  const cur = lab.run(lab.knobs.map(k => k.get()));
+  const base = J.preview ? lab.run(J.preview.backup.vals) : null;
+  return { counts: cur.counts, base: base ? base.counts : null };
+}
+
+async function scenePlay(ctx, input, res) {
+  if (!ctx) return;
+  const st = ctx.st;
+  st.inputObj = input; st.inputText = JSON.stringify(input, null, 2);
+  try {
+    const r = computeRun(ctx, input, res, null);
+    st.steps = r.steps; st.result = { prep: r.p, jev: res, decision: r.dec };
+  } catch (e) { toast(e.message, true); return; }
+  st.lastJev = res; st.trace = null; st.stepIndex = 0;
+  ctx.redraw();
+  ctx.host.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  await stepTo(ctx, st.steps.length - 1);
 }
 
 function ecoCard(payload) {
@@ -1898,7 +2251,7 @@ function sceneSvg(ctx) {
   const llms = new Set((spec.llms || []).map(l => l.route));
   routes.forEach((r, i) => {
     const y = top + i * 96;
-    const kind = routeKind(r);
+    const kind = (ctx.kindOf || routeKind)(r);
     const d = `M ${xSwitch} ${mid} C ${xSwitch + 120} ${mid}, ${xSwitch + 110} ${y}, ${xEnd - 40} ${y} L ${xEnd} ${y}`;
     const cls = `rail-out k-${kind}` + (hit ? (hit === r ? ' hit' : ' dim') : '');
     svg.append(sv('path', { d, class: 'rail-bed ' + cls }), sv('path', { d, class: 'rail-ties ' + cls }), sv('path', { d, id: 'rail-r-' + i, class: 'rail-line ' + cls }));
@@ -1906,8 +2259,18 @@ function sceneSvg(ctx) {
     g.append(sv('rect', { x: xEnd, y: y - 30, width: 170, height: 60, rx: 10 }),
       sv('text', { x: xEnd + 85, y: y - 5, 'text-anchor': 'middle', class: 'st-t' }, r.length > 17 ? r.slice(0, 16) + '…' : r),
       sv('text', { x: xEnd + 85, y: y + 16, 'text-anchor': 'middle', class: 'st-s' }, KIND_LABEL[kind] + (llms.has(r) ? ' · LLM' : '') + (spec.decision.error_route === r ? ' · panne' : '')));
-    g.addEventListener('click', () => { ctx.st.sel = 'route:' + r; ctx.redraw(); });
+    g.addEventListener('click', () => { ctx.st.sel = 'route:' + r; ctx.st.panel = 'module'; ctx.redraw(); });
     svg.append(g);
+    if (ctx.fleet) {
+      const c = ctx.fleet.counts[r] || { n: 0, err: 0 };
+      const b = ctx.fleet.base ? (ctx.fleet.base[r] || { n: 0 }).n : null;
+      const delta = b === null || b === c.n ? '' : ` (${c.n > b ? '+' : '−'}${Math.abs(c.n - b)})`;
+      const label = `🚃 ${c.n}${delta}` + (c.err ? ` · ✗ ${c.err}` : '');
+      svg.append(sv('g', { class: 'fleet' + (c.err ? ' bad' : '') + (delta ? ' moved' : '') },
+        sv('title', {}, `${c.n} wagon(s) d'essai sur cette voie` + (c.err ? `, dont ${c.err} erreur(s)` : '') + (delta ? `, ${delta.trim()} par rapport au réglage actuel` : '')),
+        sv('rect', { x: xEnd, y: y - 56, width: 170, height: 22, rx: 11 }),
+        sv('text', { x: xEnd + 85, y: y - 40, 'text-anchor': 'middle' }, label)));
+    }
   });
   // stations de la voie principale
   pos.forEach(m => {
@@ -1919,7 +2282,7 @@ function sceneSvg(ctx) {
       sv('text', { x: m.x, y: m.y - (big ? 46 : 40), 'text-anchor': 'middle', class: 'st-t' }, ({ gare: 'Gare', source: 'Source', prep: 'Préparation', llm_in: 'LLM d\'entrée', jev: 'Aiguilleur (Jev)', decision: 'Aiguillage' })[m.id] || m.label),
       sv('text', { x: m.x, y: m.y - (big ? 28 : 24), 'text-anchor': 'middle', class: 'st-s' }, String(m.sub || '').slice(0, 20)),
       sv('circle', { cx: m.x, cy: m.y, r: 7, class: 'st-dot' }));
-    g.addEventListener('click', () => { ctx.st.sel = m.id; ctx.redraw(); });
+    g.addEventListener('click', () => { ctx.st.sel = m.id; ctx.st.panel = 'module'; ctx.redraw(); });
     svg.append(g);
   });
   // aiguillage
@@ -1990,13 +2353,13 @@ function moduleCard(ctx) {
     rules.forEach((r, i) => {
       const label = r.label || r.when.map(c => `${c.field} ${c.op} ${c.value ?? ''}`).join(' et ');
       const on = hitReason && (hitReason === r.label || hitReason.startsWith(r.when.map(c => `${c.field} ${c.op}`)[0]));
-      put(card, h('div', { class: 'signal' + (on ? ' on' : '') }, h('span', { class: 'lamp k-' + routeKind(r.route.startsWith('=') ? 'auto' : r.route) }), h('span', { class: 'small', text: `${i + 1}. ${label}` }), h('b', { class: 'mono small', text: ' → ' + r.route })));
+      put(card, h('div', { class: 'signal' + (on ? ' on' : '') }, h('span', { class: 'lamp k-' + (ctx.kindOf || routeKind)(r.route.startsWith('=') ? 'auto' : r.route) }), h('span', { class: 'small', text: `${i + 1}. ${label}` }), h('b', { class: 'mono small', text: ' → ' + r.route })));
     });
     put(card, h('div', { class: 'signal' }, h('span', { class: 'lamp' }), h('span', { class: 'small', text: 'Sinon' }), h('b', { class: 'mono small', text: ' → ' + (spec.decision.default_route || spec.decision.review_route || '') })),
       h('div', { class: 'notice warn small', text: `Si Jev ne répond pas : voie « ${spec.decision.error_route} ».` }));
     if (hitReason) put(card, h('div', { class: 'notice ok small' }, 'Règle appliquée : ', h('b', { text: hitReason })));
   } else if (sel.startsWith('route:')) {
-    const r = sel.slice(6), kind = routeKind(r);
+    const r = sel.slice(6), kind = (ctx.kindOf || routeKind)(r);
     const l = (spec.llms || []).find(x => x.route === r);
     put(card, title(`🏁 Voie « ${r} »`, 'Une destination de l\'automate. Dans n8n, un nœud « Route : ' + r + ' » attend vos actions ; dans le Hub, l\'agent lit la consigne de cette voie.'),
       h('span', { class: 'badge k-' + kind, text: KIND_LABEL[kind] }),
@@ -2281,6 +2644,14 @@ function sceneReplay(ctx) {
   } catch (e) { /* fiche en cours d'édition */ }
 }
 
+function sideTabs(ctx) {
+  const pick = v => { ctx.st.panel = v; ctx.redraw(); };
+  const on = ctx.st.panel === 'reglage';
+  return h('div', { class: 'seg side-tabs' },
+    h('button', { class: on ? '' : 'on', text: '🔎 Module choisi', onclick: () => pick('module') }),
+    h('button', { class: on ? 'on' : '', text: '🎛 Salle de réglage', onclick: () => pick('reglage') }));
+}
+
 function renderScene(ctx) {
   const host = clear(ctx.host);
   if (!ctx.build) { put(host, h('div', { class: 'card empty', text: 'Complétez l\'automate : la vue graphique apparaîtra dès qu\'il est valide.' })); return; }
@@ -2293,7 +2664,7 @@ function renderScene(ctx) {
     ]),
     h('div', { class: 'scene' },
       h('div', { class: 'scene-main' }, sceneGauges(ctx), h('div', { class: 'scene-track' }, sceneSvg(ctx)), cargoPanel(ctx)),
-      h('aside', { class: 'scene-side' }, moduleCard(ctx))),
+      h('aside', { class: 'scene-side' }, ctx.salle ? sideTabs(ctx) : null, ctx.salle && ctx.st.panel === 'reglage' ? ctx.salle(ctx) : moduleCard(ctx))),
     sceneConsole(ctx));
   if (ctx.st.steps && !ctx.st.animating) placeWagon(ctx);
 }

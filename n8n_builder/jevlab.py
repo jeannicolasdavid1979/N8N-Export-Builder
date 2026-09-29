@@ -35,7 +35,8 @@ TYPES = {
     "etiquettes": "Étiquettes multiples",
     "pour_chaque": "Même question pour chaque élément d'une liste",
 }
-MAX_TESTS = 40
+MAX_TESTS = 100
+KINDS = ("auto", "humain", "blocage")
 
 
 class FicheError(ValueError):
@@ -223,8 +224,20 @@ def validate_fiche(raw: Any) -> dict[str, Any]:
             continue
         attendus = {k: str(v) for k, v in (t.get("attendus") or {}).items() if k in qmap and v not in (None, "")}
         tests.append({"entree": t["entree"], "attendu": _s(t.get("attendu"), 40), "attendus": attendus,
-                      "note": _s(t.get("note"), 300)})
+                      "note": _s(t.get("note"), 300), "source": "ia" if t.get("source") == "ia" else "reel"})
     f["tests"] = tests
+    # Salle de réglage : ce que coûte une erreur, ce que coûte un passage humain, et la nature de chaque voie.
+    rg = raw.get("reglage") if isinstance(raw.get("reglage"), dict) else {}
+
+    def _eur(v: Any, default: float) -> float:
+        try:
+            x = float(v)
+        except (TypeError, ValueError):
+            return default
+        return min(max(x, 0.0), 1_000_000.0) if x == x else default
+    voies = rg.get("voies") if isinstance(rg.get("voies"), dict) else {}
+    f["reglage"] = {"cout_erreur": _eur(rg.get("cout_erreur"), 50.0), "cout_revue": _eur(rg.get("cout_revue"), 2.0),
+                    "voies": {k: v for k, v in voies.items() if k in rids and v in KINDS}}
     f["jev_fournisseur"] = raw.get("jev_fournisseur") if raw.get("jev_fournisseur") in ("typesafe", "openrouter") else "typesafe"
     f["modele"] = _s(raw.get("modele"), 80) or ("~typesafe/jev-latest" if f["jev_fournisseur"] == "openrouter" else "jev-latest")
     f["declencheur"] = raw.get("declencheur") if raw.get("declencheur") in ("webhook", "manual") else "webhook"
@@ -528,7 +541,7 @@ async def llm_field(provider_id: str, key: str | None, model: str, fiche: dict[s
             f"Valeur actuelle : {json.dumps(get_path(fiche, path), ensure_ascii=False)}")
     if consigne.strip():
         user += f"\nSouhait de la personne : {consigne.strip()[:1000]}"
-    text = await P.chat(p, key, model, SYSTEM_FIELD, user, base_url=base_url, max_tokens=3000)
+    text = await P.chat(p, key, model, SYSTEM_FIELD, user, base_url=base_url, max_tokens=6000 if path == "tests" else 3000)
     try:
         data = P.extract_json(text)
         value = data["valeur"]

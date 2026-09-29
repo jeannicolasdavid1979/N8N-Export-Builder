@@ -184,7 +184,7 @@ dialog::backdrop { background: rgba(10, 12, 30, .45); }
 .seg button.on { background: var(--accent); color: var(--on-accent); }
 .scene { --sc-bg: #0d1120; --sc-panel: #161c30; --sc-line: #2a3354; --sc-text: #e6e9f5; --sc-mute: #8e96b4;
   --g-ok: #22c55e; --g-no: #ef4444; --g-mid: #f59e0b; --g-acc: #8b8cf8; --g-track: #262d48;
-  display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 14px; margin-top: 14px; }
+  display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 14px; margin-top: 14px; align-items: start; }
 .scene-main { background: var(--sc-bg); border-radius: var(--radius); padding: 14px; color: var(--sc-text); min-width: 0;
   background-image: radial-gradient(rgba(255,255,255,.05) 1px, transparent 1px); background-size: 18px 18px; }
 .scene-track { overflow-x: auto; }
@@ -260,3 +260,18 @@ dialog::backdrop { background: rgba(10, 12, 30, .45); }
 .fav-cell { display: flex; gap: 4px; justify-content: flex-end; align-items: center; }
 .star.on { color: #d97706; }
 .model-in .fav-select { width: auto; max-width: 220px; }
+
+/* Salle de réglage : les manettes */
+.side-tabs { margin-bottom: 10px; display: flex; } .side-tabs button { flex: 1; font-size: 13px; }
+.salle h3 { margin: 6px 0 0; font-size: 14px; }
+.lever { border: 1px solid var(--border); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 6px; background: var(--surface); }
+.lever.on { border-color: var(--accent); background: var(--accent-soft); }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chip { background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; font-size: 12px; }
+.chip.bad { background: var(--critical-soft); color: var(--critical); border-color: transparent; }
+.chip.good { background: var(--safe-soft); color: var(--safe); border-color: transparent; }
+.moved { border-top: 1px dashed var(--border-strong); padding-top: 6px; display: flex; flex-direction: column; gap: 2px; align-items: flex-start; }
+.fleet rect { fill: #1e2644; stroke: #59627f; stroke-width: 1.5; }
+.fleet text { fill: var(--sc-text); font: 700 12.5px var(--font); }
+.fleet.moved rect { stroke: #8b8cf8; stroke-width: 2.5; }
+.fleet.bad rect { stroke: #ef4444; }

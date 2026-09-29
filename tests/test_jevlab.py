@@ -152,3 +152,27 @@ def test_openapi_lists_routes_and_header_key():
         ["traiter_vite", "traiter", "classer", "a_relire"]
     assert doc["components"]["securitySchemes"]["cle_automate"]["name"] == "X-Builder-Key"
     assert "Préviens l'équipe" in op["description"]
+
+
+def test_reglage_is_validated_and_kept():
+    raw = fiches.get("tri-emails")["fiche"]
+    f = jevlab.validate_fiche({**raw, "reglage": {"cout_erreur": "120", "cout_revue": -3,
+                                                  "voies": {"a_relire": "humain", "inconnue": "auto", "classer": "n'importe"}}})
+    assert f["reglage"]["cout_erreur"] == 120.0 and f["reglage"]["cout_revue"] == 0.0
+    assert f["reglage"]["voies"] == {"a_relire": "humain"}
+    assert jevlab.validate_fiche(raw)["reglage"] == {"cout_erreur": 50.0, "cout_revue": 2.0, "voies": {}}
+    tests = [{"entree": f"cas {i}", "attendu": "classer", "source": "ia" if i % 2 else "autre"} for i in range(120)]
+    f = jevlab.validate_fiche({**raw, "tests": tests})
+    assert len(f["tests"]) == 100 and [t["source"] for t in f["tests"][:2]] == ["reel", "ia"]
+
+
+@pytest.mark.parametrize("fid", [f["id"] for f in fiches.FICHES])
+def test_salle_de_reglage_can_patch_decision_thresholds(fid):
+    """La salle de réglage rejoue le code de l'aiguillage en ne changeant que CFG.verdicts : la ligne CFG doit rester repérable."""
+    import re
+    _, s = jevlab.to_spec_or_error(fiches.get(fid)["fiche"])
+    code = next(n for n in build(s)["nodes"] if n["name"] == "Décision déterministe")["parameters"]["jsCode"]
+    m = re.search(r"const CFG = ([\s\S]*?);\n(?=\s*function flatten)", code)
+    assert m, fid
+    cfg = json.loads(m.group(1))
+    assert set(cfg["verdicts"]) == {q["id"] for q in fiches.get(fid)["fiche"]["questions"]}
