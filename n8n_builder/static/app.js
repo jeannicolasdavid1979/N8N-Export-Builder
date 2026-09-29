@@ -1769,7 +1769,7 @@ function gauge(label, value, verdict, sub) {
 }
 
 function sceneGauges(ctx) {
-  const res = ctx.st.result;
+  const res = ctx.st.result && shown(ctx, 'jev') ? ctx.st.result : null;
   const answers = (res && res.jev && res.jev.answers) || {};
   const vars = (res && res.decision && res.decision.vars) || {};
   const qs = Object.entries((res && res.prep && res.prep.questions) || ctx.build.spec.questions || {});
@@ -1795,11 +1795,12 @@ function sceneSvg(ctx) {
   const xSwitch = 640, xEnd = 820;
   const step = (xSwitch - 150) / Math.max(1, mods.length - 1);
   const pos = mods.map((m, i) => ({ ...m, x: 80 + i * step, y: mid }));
+  ctx.geo = { mid, xSwitch, x: Object.fromEntries(pos.map(m => [m.id, m.x])) };
   const svg = sv('svg', { viewBox: `0 0 ${W} ${H}`, class: 'scene-svg', role: 'img', 'aria-label': 'Schéma du workflow en voie ferrée' });
   const defs = sv('defs', {}, sv('filter', { id: 'glow' }, sv('feGaussianBlur', { stdDeviation: 4, result: 'b' }), sv('feMerge', {}, sv('feMergeNode', { in: 'b' }), sv('feMergeNode', { in: 'SourceGraphic' }))));
   svg.append(defs);
   const res = ctx.st.result;
-  const hit = res && res.decision && res.decision.route;
+  const hit = res && res.decision && shown(ctx, 'decision') ? res.decision.route : null;
   // voie principale
   const main = `M 40 ${mid} L ${xSwitch} ${mid}`;
   svg.append(sv('path', { d: main, class: 'rail-bed' }), sv('path', { d: main, class: 'rail-ties' }), sv('path', { d: main, id: 'rail-main', class: 'rail-line' }));
@@ -1822,11 +1823,11 @@ function sceneSvg(ctx) {
   // stations de la voie principale
   pos.forEach(m => {
     const big = m.id === 'jev';
-    const w = Math.max(big ? 150 : 112, Math.min(step - 12, m.label.length * 8.2 + 22)), hh = big ? 104 : 84;
+    const w = Math.max(big ? 150 : 112, Math.min(step - 12, 140)), hh = big ? 104 : 84;
     const g = sv('g', { class: 'station' + (big ? ' cabin' : '') + (ctx.st.sel === m.id ? ' sel' : '') + (res ? ' passed' : ''), tabindex: 0, 'data-mod': m.id });
     g.append(sv('rect', { x: m.x - w / 2, y: m.y - hh - 18, width: w, height: hh, rx: 12 }),
       sv('text', { x: m.x, y: m.y - hh + (big ? 20 : 14), 'text-anchor': 'middle', class: 'st-i' }, m.icon),
-      sv('text', { x: m.x, y: m.y - (big ? 46 : 40), 'text-anchor': 'middle', class: 'st-t' }, m.label.length > 20 ? m.label.split(' ').slice(0, 2).join(' ') : m.label),
+      sv('text', { x: m.x, y: m.y - (big ? 46 : 40), 'text-anchor': 'middle', class: 'st-t' }, ({ gare: 'Gare', source: 'Source', prep: 'Préparation', llm_in: 'LLM d\'entrée', jev: 'Aiguilleur (Jev)', decision: 'Aiguillage' })[m.id] || m.label),
       sv('text', { x: m.x, y: m.y - (big ? 28 : 24), 'text-anchor': 'middle', class: 'st-s' }, String(m.sub || '').slice(0, 20)),
       sv('circle', { cx: m.x, cy: m.y, r: 7, class: 'st-dot' }));
     g.addEventListener('click', () => { ctx.st.sel = m.id; ctx.redraw(); });
@@ -1836,35 +1837,10 @@ function sceneSvg(ctx) {
   svg.append(sv('circle', { cx: xSwitch, cy: mid, r: 11, class: 'switch-dot' + (hit ? ' on' : '') }));
   // wagon
   const wagon = sv('g', { id: 'wagon', class: 'wagon', transform: `translate(40 ${mid})` },
-    sv('rect', { x: -24, y: -30, width: 48, height: 24, rx: 5 }), sv('text', { x: 0, y: -13, 'text-anchor': 'middle' }, '✉'),
-    sv('circle', { cx: -13, cy: -4, r: 4 }), sv('circle', { cx: 13, cy: -4, r: 4 }));
+    sv('rect', { x: -24, y: -14, width: 48, height: 22, rx: 5 }), sv('text', { x: 0, y: 2, 'text-anchor': 'middle' }, '✉'),
+    sv('circle', { cx: -13, cy: 10, r: 4 }), sv('circle', { cx: 13, cy: 10, r: 4 }));
   svg.append(wagon);
   return svg;
-}
-
-async function animateWagon(host, routeIndex) {
-  const svg = host.querySelector('.scene-svg');
-  if (!svg) return;
-  const wagon = svg.querySelector('#wagon');
-  const legs = [svg.querySelector('#rail-main'), routeIndex >= 0 ? svg.querySelector('#rail-r-' + routeIndex) : null].filter(Boolean);
-  const stations = [...svg.querySelectorAll('.station:not(.dest)')];
-  for (const [li, path] of legs.entries()) {
-    const len = path.getTotalLength();
-    const dur = li === 0 ? 1800 : 1100;
-    await new Promise(done => {
-      const t0 = performance.now();
-      const tick = now => {
-        const k = Math.min(1, (now - t0) / dur);
-        const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
-        const p = path.getPointAtLength(e * len);
-        wagon.setAttribute('transform', `translate(${p.x} ${p.y})`);
-        if (li === 0) stations.forEach(s => { const c = s.querySelector('.st-dot'); if (c && Number(c.getAttribute('cx')) <= p.x + 2) s.classList.add('lit'); });
-        if (k < 1) requestAnimationFrame(tick); else done();
-      };
-      requestAnimationFrame(tick);
-    });
-  }
-  svg.querySelectorAll('.station.dest.hit').forEach(s => s.classList.add('arrived'));
 }
 
 // Carte détaillée du module choisi
@@ -1894,7 +1870,7 @@ function moduleCard(ctx) {
       h('div', { class: 'notice info small', text: 'Dans le test du builder, ce LLM n\'est pas appelé : Jev juge l\'état brut. Dans n8n, il est appelé à chaque passage.' }));
   } else if (sel === 'jev') {
     put(card, title('🧠 Cabine de l\'aiguilleur (Jev)', 'Jev ne rédige rien : il répond à chaque question par une probabilité. Toutes les questions partent en un seul appel.'));
-    const answers = (res && res.jev && res.jev.answers) || null;
+    const answers = (res && shown(ctx, 'jev') && res.jev && res.jev.answers) || null;
     for (const [id, q] of Object.entries((res && res.prep.questions) || spec.questions).slice(0, 12)) {
       const a = answers && answers[id];
       const v = ((spec.decision.verdicts || {})[id]) || ((spec.decision.verdicts || {})[id.split('__')[0]]) || null;
@@ -1918,7 +1894,7 @@ function moduleCard(ctx) {
       put(card, block);
     }
   } else if (sel === 'decision') {
-    const hitReason = res && res.decision.reason;
+    const hitReason = res && shown(ctx, 'decision') ? res.decision.reason : null;
     put(card, title('🔀 Aiguillage', 'Des règles écrites, lues dans l\'ordre : la première qui s\'applique choisit la voie. Aucune IA ici, c\'est ce qui rend la décision identique à chaque passage.'));
     const rules = spec.decision.rules || [];
     if (spec.decision.mode === 'choice') put(card, h('p', {}, `Voie = mot choisi par Jev pour « ${spec.decision.question} », si sa confiance atteint ${Math.round(spec.decision.min_confidence * 100)} %. Sinon : ${spec.decision.review_route}.`));
@@ -1929,7 +1905,7 @@ function moduleCard(ctx) {
     });
     put(card, h('div', { class: 'signal' }, h('span', { class: 'lamp' }), h('span', { class: 'small', text: 'Sinon' }), h('b', { class: 'mono small', text: ' → ' + (spec.decision.default_route || spec.decision.review_route || '') })),
       h('div', { class: 'notice warn small', text: `Si Jev ne répond pas : voie « ${spec.decision.error_route} ».` }));
-    if (res) put(card, h('div', { class: 'notice ok small' }, 'Règle appliquée : ', h('b', { text: res.decision.reason })));
+    if (hitReason) put(card, h('div', { class: 'notice ok small' }, 'Règle appliquée : ', h('b', { text: hitReason })));
   } else if (sel.startsWith('route:')) {
     const r = sel.slice(6), kind = routeKind(r);
     const l = (spec.llms || []).find(x => x.route === r);
@@ -1946,11 +1922,14 @@ function sceneConsole(ctx) {
   const { st } = ctx;
   const jevReady = (provider('typesafe') || {}).configured;
   const input = textArea(st.inputText ?? JSON.stringify(ctx.build.spec.sample && !Array.isArray(ctx.build.spec.sample) ? ctx.build.spec.sample : (ctx.build.spec.sample || [])[0] || {}, null, 2), v => { st.inputText = v; }, { class: 'code', rows: 6 });
-  const log = h('div', { class: 'trace' }, (st.trace || ['En attente d\'un wagon.']).map(l => h('div', { text: l })));
-  const out = h('pre', { class: 'json', text: st.result ? JSON.stringify({ route: st.result.decision.route, raison: st.result.decision.reason, variables: st.result.decision.vars, extra: st.result.decision.extra, jev_modele: st.result.jev && st.result.jev.model }, null, 2) : '{ }' });
+  const lines = st.steps ? st.steps.slice(0, st.stepIndex + 1).flatMap(s => s.trace) : (st.trace || ['En attente d\'un wagon.']);
+  const log = h('div', { class: 'trace' }, lines.map(l => h('div', { text: l })));
+  const fin = st.steps && shown(ctx, 'final');
+  const out = h('pre', { class: 'json', text: fin ? JSON.stringify({ route: st.result.decision.route, raison: st.result.decision.reason, variables: st.result.decision.vars, extra: st.result.decision.extra, jev_modele: st.result.jev && st.result.jev.model }, null, 2) : (st.steps ? '… le wagon n\'est pas encore arrivé.' : '{ }') });
   return h('div', { class: 'console card' },
-    h('div', { class: 'row between' }, h('h2', { style: 'margin:0' }, 'Console de test ', info('Écrivez un message, lancez : le wagon part de la gare, passe la cabine de Jev et prend la voie choisie. La trace raconte chaque étape ; la sortie JSON est exactement ce que l\'agent recevra.')),
+    h('div', { class: 'row between' }, h('h2', { style: 'margin:0' }, 'Console de test ', info('Écrivez un message, lancez : le wagon part de la gare, passe la cabine de Jev et prend la voie choisie. En pas à pas, il s\'arrête à chaque station : l\'encart du chargement montre ce que le nœud a ajouté, retiré ou changé.')),
       h('div', { class: 'row' },
+        h('label', { class: 'check', title: 'Le wagon s\'arrête à chaque station' }, h('input', { type: 'checkbox', checked: !!st.pas, onchange: e => { st.pas = e.target.checked; } }), 'Pas à pas'),
         h('button', { class: 'primary', disabled: !jevReady || !ctx.build, title: jevReady ? '' : 'Clé TypeSafe à renseigner dans Modèles LLM', text: '▶ Lancer avec Jev', onclick: () => sceneRun(ctx, false) }),
         h('button', { text: '▶ Lancer en simulation', title: 'Sans clé : les réponses de Jev viennent des curseurs de la cabine', onclick: () => sceneRun(ctx, true) }))),
     h('div', { class: 'console-grid' },
@@ -1966,60 +1945,235 @@ function toInput(ctx, text) {
   return { [spec.state.mode === 'field' ? spec.state.field : ((spec.state.fields || [])[0] || 'message')]: text };
 }
 
+// Étapes : le chargement du wagon à chaque station, sa trace et son explication ---------------------------
+
+function stepIdx(ctx, k) {
+  const s = ctx.st.steps || [];
+  if (k === 'final') return s.length - 1;
+  return s.findIndex(x => x.mod === k);
+}
+function shown(ctx, k) {
+  const st = ctx.st;
+  if (!st.steps) return !!st.result;
+  const i = stepIdx(ctx, k);
+  return i < 0 ? st.stepIndex >= stepIdx(ctx, 'decision') : st.stepIndex >= i;
+}
+function publicVars(v) { return Object.fromEntries(Object.entries(v || {}).filter(([k]) => !k.startsWith('__'))); }
+function answerText(a, q) {
+  if (!a) return 'pas de réponse';
+  if (a.type === 'noul') return `${Math.round(a.noul * 100)} % de oui`;
+  if (a.type === 'choice') return `« ${String(/^c\d+$/.test(a.choice) && q ? (q.criteria[a.choice] || a.choice) : a.choice).slice(0, 50)} » à ${Math.round(a.confidence * 100)} %`;
+  return `score ${fmtNum(a.score, 2)} sur ${q && q.criteria ? q.criteria.length - 1 : '?'}`;
+}
+
+function buildSteps(ctx, input, p, res, dec, err) {
+  const spec = ctx.build.spec;
+  const steps = [];
+  const c0 = { message: input };
+  steps.push({ mod: 'gare', titre: 'Gare de départ', cargo: c0,
+    note: spec.trigger.type === 'webhook' ? 'Le message arrive par le webhook. Le wagon est chargé tel quel.' : 'Le wagon est chargé avec l\'exemple.',
+    trace: [`🚉 Wagon reçu en gare (${spec.trigger.type === 'webhook' ? 'webhook /' + spec.trigger.path : spec.trigger.type}).`] });
+  if (spec.source) steps.push({ mod: 'source', titre: 'Source', cargo: c0, note: 'En production, la source charge un wagon par élément lu (article RSS, réponse web). En test, l\'exemple le remplace.', trace: ['📡 Source : remplacée par l\'exemple en test.'] });
+  if (!p) { steps.push({ mod: 'prep', titre: 'Atelier de préparation', cargo: c0, note: err, trace: ['⚠ ' + err] }); return steps; }
+  const calc = publicVars(p.vars);
+  const c1 = { message: input, etat_pour_jev: p.state };
+  if (Object.keys(calc).length) c1.calculs = calc;
+  if (ctx.build.uses_jev) c1.questions_pour_jev = Object.keys(p.questions);
+  steps.push({ mod: 'prep', titre: 'Atelier de préparation', cargo: c1,
+    note: 'L\'atelier ajoute ce que Jev va lire (etat_pour_jev), les calculs faits par le code et la liste des questions. Le message d\'origine reste à bord.',
+    trace: [`🛠 Atelier : ${Object.keys(calc).length ? Object.keys(calc).length + ' valeur(s) calculée(s) (' + Object.keys(calc).slice(0, 4).join(', ') + ')' : 'rien à calculer'}, ${Object.keys(p.questions).length} question(s) préparée(s).`] });
+  if (spec.entree_llm) steps.push({ mod: 'llm_in', titre: 'LLM d\'entrée', cargo: c1,
+    note: `Dans n8n, ${spec.entree_llm.model} réécrit la demande et remplace etat_pour_jev par son texte. Il n'est pas appelé dans ce test : le chargement ne change pas ici.`,
+    trace: [`✍ LLM d'entrée (${spec.entree_llm.model}) : non appelé en test, état conservé.`] });
+  let c2 = c1;
+  if (ctx.build.uses_jev) {
+    if (err) {
+      steps.push({ mod: 'jev', titre: 'Cabine de l\'aiguilleur', cargo: { ...c1, erreur_jev: err }, note: 'Jev n\'a pas répondu : le wagon partira sur la voie de secours.', trace: ['⚠ ' + err, `En production : voie de secours « ${spec.decision.error_route} ».`] });
+      return steps;
+    }
+    const rep = Object.fromEntries(Object.entries(res.answers || {}).map(([id, a]) => [id, answerText(a, p.questions[id])]));
+    c2 = { ...c1, reponses_jev: rep };
+    steps.push({ mod: 'jev', titre: 'Cabine de l\'aiguilleur (Jev)', cargo: c2,
+      note: 'Jev ajoute une réponse chiffrée par question, en un seul appel. Il ne réécrit pas le message : il le juge.',
+      trace: [`🧠 Cabine : ${Object.keys(rep).length} question(s) en 1 appel (${res.model})${res.usage ? ' · ' + res.usage.input_tokens + ' tokens · ' + (res.usage.input_tokens * JEV_PRICE_PER_TOKEN).toFixed(6).replace('.', ',') + ' $' : ''}.`,
+        ...Object.entries(rep).slice(0, 8).map(([k, v]) => `   • ${k} : ${v}`)] });
+  }
+  const verdicts = Object.fromEntries(Object.entries(dec.vars || {}).filter(([k]) => /_verdict$|_retenus$|_nombre$/.test(k)));
+  const c3 = { ...c2 };
+  if (Object.keys(verdicts).length) c3.verdicts = verdicts;
+  const extraCalc = Object.fromEntries(Object.entries(dec.vars || {}).filter(([k]) => !(k in calc) && !/_verdict$|_retenus$|_nombre$|_classement$|_confiance$|_norme$/.test(k) && !(k in (res ? res.answers || {} : {}))));
+  if (Object.keys(extraCalc).length) c3.calculs = { ...(c3.calculs || {}), ...extraCalc };
+  c3.route = dec.route;
+  c3.raison = dec.reason;
+  if (dec.extra && Object.keys(dec.extra).length) c3.extra = dec.extra;
+  steps.push({ mod: 'decision', titre: 'Aiguillage', cargo: c3,
+    note: 'Le code traduit les probabilités en mots (verdicts) avec vos seuils, puis lit les règles dans l\'ordre. La première qui s\'applique écrit la route et la raison sur le wagon.',
+    trace: [`🔀 Aiguillage : ${dec.reason} → voie « ${dec.route} ».`] });
+  const l = (spec.llms || []).find(x => x.route === dec.route);
+  const fin = { route: dec.route, raison: dec.reason, variables: publicVars(dec.vars) };
+  if (dec.extra && Object.keys(dec.extra).length) fin.extra = dec.extra;
+  if (l) fin.extra = { ...(fin.extra || {}), llm: `(texte rédigé par ${l.model} dans n8n)` };
+  steps.push({ mod: 'route:' + dec.route, titre: `Voie « ${dec.route} »`, cargo: fin,
+    note: 'Arrivée : voici exactement ce que reçoit l\'agent. Le message, l\'état et les réponses brutes restent dans l\'automate : l\'agent lit un verdict court, c\'est là que se font les économies de tokens.'
+      + (l ? ` Sur cette voie, ${l.model} ajoute sa rédaction dans extra.llm.` : ''),
+    trace: [`🏁 Arrivée voie « ${dec.route} » (${KIND_LABEL[routeKind(dec.route)]})${l ? ' · ' + l.model + ' y rédige la réponse' : ''}.`] });
+  return steps;
+}
+
+function flatCargo(o, pre = '', out = {}, depth = 0) {
+  for (const [k, v] of Object.entries(o || {})) {
+    const path = pre ? pre + '.' + k : k;
+    if (v && typeof v === 'object' && !Array.isArray(v) && depth < 2 && Object.keys(v).length) flatCargo(v, path, out, depth + 1);
+    else out[path] = typeof v === 'string' ? v : JSON.stringify(v);
+  }
+  return out;
+}
+function cargoDiff(a, b) {
+  const fa = flatCargo(a), fb = flatCargo(b);
+  const lines = [];
+  const goneTop = Object.keys(a || {}).filter(k => !(k in (b || {})));
+  for (const k of goneTop) lines.push({ t: '-', path: k, to: 'retiré' + (a[k] && typeof a[k] === 'object' ? ' avec tout son contenu' : '') });
+  for (const [k, v] of Object.entries(fb)) {
+    if (!(k in fa)) lines.push({ t: '+', path: k, to: v });
+    else if (fa[k] !== v) lines.push({ t: '~', path: k, from: fa[k], to: v });
+  }
+  for (const k of Object.keys(fa)) if (!(k in fb) && !goneTop.includes(k.split('.')[0])) lines.push({ t: '-', path: k, to: 'retiré' });
+  return lines;
+}
+
+function cargoPanel(ctx) {
+  const { st } = ctx;
+  if (!st.steps) return h('div', { class: 'cargo empty-cargo' }, h('b', { text: 'Chargement du wagon' }), ' ', info('Le contenu du message à chaque station. En pas à pas, chaque nœud montre ce qu\'il ajoute (+), retire (−) ou change (~).'),
+    h('span', { class: 'small', text: ' Lancez un test : le contenu du wagon s\'affichera ici, étape par étape.' }));
+  const i = st.stepIndex, step = st.steps[i], prev = i > 0 ? st.steps[i - 1].cargo : null;
+  const diff = prev ? cargoDiff(prev, step.cargo) : [{ t: '+', path: 'message', to: JSON.stringify(step.cargo.message) }];
+  const shownDiff = diff.slice(0, 14);
+  const val = v => String(v).length > 90 ? String(v).slice(0, 88) + '…' : String(v);
+  return h('div', { class: 'cargo' },
+    h('div', { class: 'cargo-head' },
+      h('div', {}, h('b', { text: 'Chargement du wagon ' }), info('Le contenu réel du message à cette station, calculé en exécutant le code des nœuds. À droite : ce que ce nœud a changé.')),
+      h('div', { class: 'row' },
+        h('button', { class: 'small', text: '◀ Précédente', disabled: i === 0, onclick: () => stepTo(ctx, i - 1) }),
+        h('span', { class: 'step-pill', text: `Étape ${i + 1} / ${st.steps.length} : ${step.titre}` }),
+        h('button', { class: 'small primary', text: 'Suivante ▶', disabled: i >= st.steps.length - 1, onclick: () => stepTo(ctx, i + 1) }),
+        i < st.steps.length - 1 ? h('button', { class: 'small ghost', text: 'Jusqu\'au bout ⏭', onclick: () => stepTo(ctx, st.steps.length - 1) }) : null)),
+    h('div', { class: 'cargo-grid' },
+      h('pre', { class: 'json cargo-json', text: JSON.stringify(step.cargo, null, 2) }),
+      h('div', { class: 'stack' },
+        h('div', { class: 'small muted', text: step.note }),
+        diff.length ? h('div', { class: 'diff' }, shownDiff.map(d => h('div', { class: 'd d-' + ({ '+': 'add', '-': 'del', '~': 'chg' })[d.t] },
+          h('span', { class: 'd-sign', text: d.t === '-' ? '−' : d.t }), h('span', { class: 'mono', text: d.path }),
+          d.t === '~' ? h('span', {}, ' : ', h('s', { text: val(d.from) }), ' → ', h('b', { text: val(d.to) })) : h('span', { text: ' : ' + val(d.to) }))),
+          diff.length > shownDiff.length ? h('div', { class: 'small faint', text: `… et ${diff.length - shownDiff.length} autre(s) changement(s)` }) : null)
+          : h('div', { class: 'd d-same', text: '= Aucun changement : ce nœud laisse passer le wagon tel quel.' }))));
+}
+
+// Déplacements du wagon ----------------------------------------------------------------------------------
+
+function wagonPoint(ctx, step) {
+  const host = ctx.host;
+  if (step.mod.startsWith('route:')) {
+    const i = ctx.build.routes.indexOf(step.mod.slice(6));
+    const path = host.querySelector('#rail-r-' + i);
+    if (path) return path.getPointAtLength(path.getTotalLength());
+  }
+  const x = (ctx.geo.x || {})[step.mod];
+  return { x: x ?? 40, y: ctx.geo.mid };
+}
+function lightUpTo(ctx, x) {
+  ctx.host.querySelectorAll('.station:not(.dest)').forEach(s => { const c = s.querySelector('.st-dot'); s.classList.toggle('lit', !!c && Number(c.getAttribute('cx')) <= x + 2); });
+}
+function placeWagon(ctx) {
+  const st = ctx.st;
+  const wagon = ctx.host.querySelector('#wagon');
+  if (!wagon || !st.steps) return;
+  const step = st.steps[st.stepIndex];
+  const pt = wagonPoint(ctx, step);
+  wagon.setAttribute('transform', `translate(${pt.x} ${pt.y})`);
+  lightUpTo(ctx, step.mod.startsWith('route:') ? 9999 : pt.x);
+  if (step.mod.startsWith('route:')) ctx.host.querySelectorAll('.station.dest.hit').forEach(s => s.classList.add('arrived'));
+}
+function tween(dur, fn) {
+  return new Promise(done => { const t0 = performance.now(); const tick = now => { const k = Math.min(1, (now - t0) / dur); fn(k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2); if (k < 1) requestAnimationFrame(tick); else done(); }; requestAnimationFrame(tick); });
+}
+async function rollTo(ctx, fromStep, toStep) {
+  const wagon = ctx.host.querySelector('#wagon');
+  if (!wagon) return;
+  const a = wagonPoint(ctx, fromStep);
+  const toRoute = toStep.mod.startsWith('route:');
+  const xEnd = toRoute ? ctx.geo.xSwitch : wagonPoint(ctx, toStep).x;
+  await tween(Math.max(350, Math.abs(xEnd - a.x) * 2.2), e => { const x = a.x + (xEnd - a.x) * e; wagon.setAttribute('transform', `translate(${x} ${ctx.geo.mid})`); lightUpTo(ctx, x); });
+  if (toRoute) {
+    const path = ctx.host.querySelector('#rail-r-' + ctx.build.routes.indexOf(toStep.mod.slice(6)));
+    if (path) { const len = path.getTotalLength(); await tween(1000, e => { const p = path.getPointAtLength(e * len); wagon.setAttribute('transform', `translate(${p.x} ${p.y})`); }); }
+    ctx.host.querySelectorAll('.station.dest.hit').forEach(s => s.classList.add('arrived'));
+  }
+}
+async function stepTo(ctx, i) {
+  const st = ctx.st;
+  if (!st.steps || i < 0 || i >= st.steps.length || st.animating) return;
+  const from = st.steps[st.stepIndex];
+  const forward = i > st.stepIndex;
+  st.stepIndex = i;
+  st.sel = st.steps[i].mod;
+  st.animating = forward;
+  const wagonBefore = forward ? wagonPoint(ctx, from) : null;
+  ctx.redraw();
+  if (forward) {
+    const wagon = ctx.host.querySelector('#wagon');
+    if (wagon) wagon.setAttribute('transform', `translate(${wagonBefore.x} ${wagonBefore.y})`);
+    for (let k = st.steps.indexOf(from); k < i; k++) await rollTo(ctx, st.steps[k], st.steps[k + 1]);
+    st.animating = false;
+  }
+}
+
+function computeRun(ctx, input, res, err) {
+  const { build } = ctx;
+  const code = name => (build.workflow.nodes.find(n => n.name === name) || {}).parameters.jsCode;
+  const refs = {};
+  const items = build.spec.trigger.type === 'webhook' ? [{ json: { body: input } }] : [{ json: input }];
+  const prep = runCode(code(NODE_PREP), items, refs, {});
+  refs[NODE_PREP] = prep;
+  const p = prep[0].json;
+  if (err) return { p, steps: buildSteps(ctx, input, p, null, null, err) };
+  const dec = runCode(code(NODE_DECIDE), build.uses_jev ? [{ json: res }] : prep, refs, {})[0].json;
+  return { p, dec, steps: buildSteps(ctx, input, p, res, dec) };
+}
+
 async function sceneRun(ctx, simulate) {
   const { st, build } = ctx;
   const spec = build.spec;
   const input = toInput(ctx, st.inputText ?? JSON.stringify(spec.sample && !Array.isArray(spec.sample) ? spec.sample : (spec.sample || [])[0] || {}));
   st.inputObj = input;
-  const code = name => (build.workflow.nodes.find(n => n.name === name) || {}).parameters.jsCode;
-  const trace = [];
-  const refs = {};
+  let res = null, err = null, p = null;
   try {
+    const code = name => (build.workflow.nodes.find(n => n.name === name) || {}).parameters.jsCode;
     const items = spec.trigger.type === 'webhook' ? [{ json: { body: input } }] : [{ json: input }];
-    trace.push(`🚉 Wagon reçu en gare (${spec.trigger.type === 'webhook' ? 'webhook /' + spec.trigger.path : spec.trigger.type}).`);
-    const prep = runCode(code(NODE_PREP), items, refs, {});
-    refs[NODE_PREP] = prep;
-    const p = prep[0].json;
-    const calc = Object.keys(p.vars || {}).filter(k => !k.startsWith('__'));
-    trace.push(`🛠 Atelier : ${calc.length ? calc.length + ' valeur(s) calculée(s) (' + calc.slice(0, 4).join(', ') + ')' : 'rien à calculer'}.`);
-    if (spec.entree_llm) trace.push(`✍ LLM d'entrée (${spec.entree_llm.model}) : non appelé en test, état brut conservé.`);
-    let res = null;
+    p = runCode(code(NODE_PREP), items, {}, {})[0].json;
     if (build.uses_jev) {
       const qids = Object.keys(p.questions);
       if (simulate) {
         st.simAnswers = st.simAnswers && Object.keys(st.simAnswers).join() === qids.join() ? st.simAnswers : defaultAnswers(p.questions);
         res = { model: 'simulation', answers: clone(st.simAnswers) };
-        trace.push(`🧠 Cabine : ${qids.length} question(s), réponses simulées (réglables dans la carte de la cabine).`);
-      } else if (!qids.length) {
-        res = { model: 'aucune question', answers: {} };
-        trace.push('🧠 Cabine : aucune question pour cette entrée.');
-      } else {
-        const t0 = performance.now();
-        res = await api('POST', '/api/jev/ask', { state: p.state, questions: p.questions, model: spec.model });
-        trace.push(`🧠 Cabine : ${qids.length} question(s) en 1 appel · ${res.usage ? res.usage.input_tokens + ' tokens · ' + (res.usage.input_tokens * JEV_PRICE_PER_TOKEN).toFixed(6).replace('.', ',') + ' $ · ' : ''}${Math.round(performance.now() - t0)} ms.`);
-      }
-      for (const [id, a] of Object.entries(res.answers).slice(0, 8)) {
-        trace.push(`   • ${id} : ` + (a.type === 'noul' ? `${Math.round(a.noul * 100)} % de oui` : a.type === 'choice' ? `« ${String(/^c\d+$/.test(a.choice) ? (p.questions[id].criteria[a.choice] || a.choice) : a.choice).slice(0, 40)} » à ${Math.round(a.confidence * 100)} %` : `score ${fmtNum(a.score, 2)}`));
-      }
+      } else if (!qids.length) res = { model: 'aucune question', answers: {} };
+      else res = await api('POST', '/api/jev/ask', { state: p.state, questions: p.questions, model: spec.model });
     }
-    const dec = runCode(code(NODE_DECIDE), build.uses_jev ? [{ json: res }] : prep, refs, {})[0].json;
-    trace.push(`🔀 Aiguillage : ${dec.reason}.`);
-    const l = (spec.llms || []).find(x => x.route === dec.route);
-    trace.push(`🏁 Arrivée voie « ${dec.route} » (${KIND_LABEL[routeKind(dec.route)]})${l ? ' · un LLM ' + l.model + ' y rédigera la réponse' : ''}.`);
-    st.result = { prep: p, jev: res || { answers: {} }, decision: dec };
-    st.trace = trace;
-    st.sel = st.sel || 'jev';
+  } catch (e) { err = e.message; }
+  try {
+    const r = computeRun(ctx, input, res, err);
+    st.steps = r.steps;
+    st.result = r.dec ? { prep: r.p, jev: res || { answers: {} }, decision: r.dec } : null;
   } catch (e) {
-    trace.push('⚠ ' + e.message);
-    trace.push(`En production, le wagon prendrait la voie de secours « ${spec.decision.error_route} ».`);
-    st.trace = trace; st.result = null;
+    st.steps = [{ mod: 'gare', titre: 'Gare de départ', cargo: { message: input }, note: e.message, trace: ['⚠ ' + e.message] }];
+    st.result = null;
   }
-  st.lastJev = st.result ? st.result.jev : null;
-  st.animating = true;
+  st.lastJev = res;
+  st.trace = null;
+  if (st.pas) { st.stepIndex = 0; st.sel = 'gare'; ctx.redraw(); return; }
+  const last = st.steps.length - 1;
+  st.stepIndex = 0;
   ctx.redraw();
-  const idx = st.result ? build.routes.indexOf(st.result.decision.route) : -1;
-  await animateWagon(ctx.host, idx);
-  st.animating = false;
+  await stepTo(ctx, last);
 }
 
 // Rejoue la décision sur le dernier wagon, avec les réponses de Jev déjà reçues : aucun nouvel appel.
@@ -2027,15 +2181,14 @@ function sceneReplay(ctx) {
   const { st, build } = ctx;
   if (!st.result || !st.inputObj || !build) return;
   try {
-    const code = name => (build.workflow.nodes.find(n => n.name === name) || {}).parameters.jsCode;
-    const refs = {};
-    const items = build.spec.trigger.type === 'webhook' ? [{ json: { body: st.inputObj } }] : [{ json: st.inputObj }];
-    const prep = runCode(code(NODE_PREP), items, refs, {});
-    refs[NODE_PREP] = prep;
-    const dec = runCode(code(NODE_DECIDE), build.uses_jev ? [{ json: st.lastJev }] : prep, refs, {})[0].json;
     const before = st.result.decision.route;
-    st.result = { prep: prep[0].json, jev: st.lastJev || { answers: {} }, decision: dec };
-    st.trace = [...(st.trace || []).filter(l => !l.startsWith('↻')), `↻ Réglage modifié, décision rejouée sans nouvel appel : ${dec.reason} → voie « ${dec.route} »${before !== dec.route ? ' (avant : « ' + before + ' »)' : ''}.`];
+    const r = computeRun(ctx, st.inputObj, st.lastJev, null);
+    st.result = { prep: r.p, jev: st.lastJev || { answers: {} }, decision: r.dec };
+    const keep = st.stepIndex >= (st.steps || []).length - 1;
+    st.steps = r.steps;
+    st.stepIndex = keep ? st.steps.length - 1 : Math.min(st.stepIndex, st.steps.length - 1);
+    const last = st.steps[st.steps.length - 1];
+    last.trace = [...last.trace, `↻ Réglage modifié, décision rejouée sans nouvel appel : voie « ${r.dec.route} »${before !== r.dec.route ? ' (avant : « ' + before + ' »)' : ''}.`];
   } catch (e) { /* fiche en cours d'édition */ }
 }
 
@@ -2047,19 +2200,13 @@ function renderScene(ctx) {
       ['La ', h('b', { text: 'gare' }), ' reçoit le message (le ', h('b', { text: 'wagon' }), '). Les ', h('b', { text: 'ateliers' }), ' le préparent.'],
       ['La ', h('b', { text: 'cabine de l\'aiguilleur' }), ' est Jev : il répond aux questions, les jauges montrent ses probabilités.'],
       ['L\'', h('b', { text: 'aiguillage' }), ' applique vos règles et envoie le wagon sur une voie : ', h('span', { class: 'badge k-auto', text: 'verte, automatique' }), ' ', h('span', { class: 'badge k-review', text: 'orange, humain' }), ' ', h('span', { class: 'badge k-block', text: 'rouge, blocage' }), '.'],
-      ['Cliquez une station pour voir sa carte. Lancez un test en bas : le wagon roule et prend sa voie.'],
+      ['Cochez « Pas à pas » en bas et lancez : le wagon s\'arrête à chaque station, l\'encart « Chargement du wagon » montre ce que le nœud a ajouté (+), retiré (−) ou changé (~).'],
     ]),
     h('div', { class: 'scene' },
-      h('div', { class: 'scene-main' }, sceneGauges(ctx), h('div', { class: 'scene-track' }, sceneSvg(ctx))),
+      h('div', { class: 'scene-main' }, sceneGauges(ctx), h('div', { class: 'scene-track' }, sceneSvg(ctx)), cargoPanel(ctx)),
       h('aside', { class: 'scene-side' }, moduleCard(ctx))),
     sceneConsole(ctx));
-  const res = ctx.st.result;
-  if (res) {
-    const wagon = host.querySelector('#wagon');
-    const i = ctx.build.routes.indexOf(res.decision.route);
-    const path = host.querySelector('#rail-r-' + i);
-    if (wagon && path && !ctx.st.animating) { const pt = path.getPointAtLength(path.getTotalLength()); wagon.setAttribute('transform', `translate(${pt.x} ${pt.y})`); host.querySelectorAll('.station').forEach(s => s.classList.add('lit')); }
-  }
+  if (ctx.st.steps && !ctx.st.animating) placeWagon(ctx);
 }
 
 function viewToggle(current, onPick) {
