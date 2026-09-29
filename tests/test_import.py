@@ -143,3 +143,29 @@ def test_old_builder_workflow_with_edited_code_is_reported():
     dec["parameters"]["jsCode"] = dec["parameters"]["jsCode"].replace("const CFG = {", "const CFG = {{")
     assert "illisible" in importer.entry(wf)["origine"]["erreur"]
     assert importer.reconstruct(HANDMADE) is None
+
+
+def test_jev_calls_are_recognised_however_they_are_made():
+    body = "={{ JSON.stringify({ model: 'jev-latest', state: $json.facture, questions: { tva_ok: { type: 'noul', instructions: 'TVA correcte ?' }, compte: { type: 'choice', instructions: 'Compte ?' } } }) }}"
+    wf = {"name": "Compta Routeur", "nodes": [
+        {"name": "Webhook", "type": "n8n-nodes-base.webhook", "parameters": {"path": "compta"}},
+        {"name": "OCR Vision Mistral", "type": "n8n-nodes-base.httpRequest", "parameters": {"url": "https://api.mistral.ai/v1/chat/completions", "jsonBody": "={{ { model: 'pixtral-large' } }}"}},
+        {"name": "Jev 1 Qualification", "type": "n8n-nodes-base.httpRequest", "parameters": {"url": "https://openrouter.ai/api/v1/systemone", "jsonBody": body}},
+        {"name": "Jev 2 Imputation", "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter", "parameters": {"model": "~typesafe/jev-latest"}},
+        {"name": "Jev 3 Plan", "type": "n8n-nodes-base.httpRequest", "parameters": {"url": "={{ $env.JEV_URL }}", "jsonBody": '{"model": "jev-1.13.0"}'}},
+        {"name": "Contrôle anomalie", "type": "@n8n/n8n-nodes-langchain.chainLlm", "parameters": {"text": "Réponds par oui ou non : la facture est-elle cohérente ?"}},
+        {"name": "Résumé", "type": "@n8n/n8n-nodes-langchain.chainLlm", "parameters": {"text": "Écris un mail au client."}},
+        {"name": "Si TVA", "type": "n8n-nodes-base.if", "parameters": {"conditions": "={{ $('Jev 1 Qualification').item.json.answers.tva_ok.noul > 0.7 }}"}},
+        {"name": "Slack", "type": "n8n-nodes-base.httpRequest", "parameters": {"url": "https://hooks.slack.com/x", "jsonBody": "={{ $('Jev 2 Imputation').item.json }}"}},
+    ], "connections": {}}
+    a = importer.analyse(wf)
+    assert [x["nom"] for x in a["jev"]] == ["Jev 1 Qualification", "Jev 2 Imputation", "Jev 3 Plan"]
+    assert [x["nom"] for x in a["llm"]] == ["OCR Vision Mistral", "Contrôle anomalie", "Résumé"]
+    assert [x["nom"] for x in a["decision"]] == ["Si TVA"] and [x["nom"] for x in a["action"]] == ["Slack"]
+    d = a["jev"][0]["detail"]
+    assert "via OpenRouter" in d and "modèle jev-latest" in d and "tva_ok (noul), compte (choice)" in d
+    c = a["candidats"]
+    assert c[0].startswith("3 appels à Jev") and "un seul appel" in c[0]
+    assert any("« OCR Vision Mistral » lit une image" in x for x in c)
+    assert any("« Contrôle anomalie » semble juger" in x for x in c)
+    assert any("« Résumé » rédige" in x for x in c)

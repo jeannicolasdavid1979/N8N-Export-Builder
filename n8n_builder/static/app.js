@@ -57,7 +57,9 @@ async function api(method, path, body) {
   let data = null;
   try { data = await r.json(); } catch { data = null; }
   if (!r.ok) {
-    const e = new Error((data && (typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail))) || `Erreur ${r.status}`);
+    const gateway = !data && [502, 503, 504].includes(r.status);
+    const e = new Error((data && (typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail)))
+      || (gateway ? `Le builder n'a pas répondu à temps (erreur ${r.status} de la passerelle, Coolify ou proxy). Il redémarre peut-être : réessayez dans quelques secondes. Si ça se répète, regardez les journaux du conteneur.` : `Erreur ${r.status}`));
     e.errors = data && data.errors; e.status = r.status;
     throw e;
   }
@@ -902,7 +904,7 @@ function importResult(e, src, dlg) {
     IMPORT_GROUPS.map(([k, icon, label]) => a[k].length ? h('div', { class: 'stack', style: 'margin-top:6px' }, h('b', { class: 'small', text: `${icon} ${label}` }),
       a[k].map(it => h('div', { class: 'small' }, h('b', { text: it.nom }), h('span', { class: 'faint', text: ` (${it.type}) ` }), it.detail || ''))) : null)));
   const chat = chatProviders().filter(p => p.configured);
-  if (!a.llm.length && !a.decision.length) return card;
+  if (!a.llm.length && !a.decision.length && !a.jev.length) return card;
   if (!chat.length) return put(card, h('p', { class: 'small' }, 'Conversion par l\'IA : ', h('a', { href: '#modeles', onclick: () => dlg.close(), text: 'ajoutez une clé OpenRouter ou branchez Ollama' }), '.'));
   const st = jAssist();
   const status = h('span', { class: 'small muted' });

@@ -18,6 +18,14 @@ from .spec import SpecError, validate
 LLM_HOSTS = ("openai.com", "anthropic.com", "openrouter.ai", "mistral.ai", "generativelanguage.googleapis.com",
              "groq.com", "deepseek.com", "x.ai", "together.xyz", "cerebras.ai", "ollama")
 JEV_HINT = "systemone"
+# Jev se reconnaît à son adresse, à son fournisseur ou à son nom de modèle, où qu'ils soient dans les paramètres
+# (adresse en expression, corps JSON, nœud LangChain configuré sur OpenRouter).
+JEV_RE = re.compile(r"systemone|typesafe|\bjev[-_.](?:latest|preview|\d)", re.I)
+# Références à un autre nœud dans une expression n8n : $('Jev 1'), $node["Jev 1"] ; elles ne sont pas des appels.
+REF_RE = re.compile(r"\$\(\s*\\?['\"].*?\\?['\"]\s*\)|\$node\[\s*\\?['\"].*?\\?['\"]\s*\]")
+VISION_RE = re.compile(r"\bocr\b|vision|image|photo|scan|pdf|pixtral|llava", re.I)
+CLASSIFY_RE = re.compile(r"classe|classifi|catégor|categor|réponds? (?:uniquement |seulement )?par|oui ou non|true ou false|"
+                         r"vrai ou faux|choisis|parmi|note de \d|score|priorit|urgen|qualifi|valide|conforme|anomal|coh[ée]ren", re.I)
 DECISION_TYPES = ("n8n-nodes-base.if", "n8n-nodes-base.switch", "n8n-nodes-base.filter")
 CODE_TYPES = ("n8n-nodes-base.code", "n8n-nodes-base.function", "n8n-nodes-base.functionItem", "n8n-nodes-base.set")
 LLM_CLASSIFY = ("textClassifier", "sentimentAnalysis")
@@ -122,6 +130,31 @@ def _categories(p: dict[str, Any]) -> list[str]:
             for c in cats if isinstance(c, dict) and c.get("category")]
 
 
+def _leads_to_decision(name: str, nexts: dict[str, list[str]], by_name: dict[str, Any]) -> bool:
+    """Une condition juste après, ou après un nœud de code qui lit la réponse."""
+    for x in nexts.get(name, []):
+        k = classify(by_name.get(x) or {})
+        if k == "decision" or (k == "code" and any(classify(by_name.get(y) or {}) == "decision" for y in nexts.get(x, []))):
+            return True
+    return False
+
+
+def _jev_detail(p: dict[str, Any]) -> str:
+    """Adresse, modèle et questions d'un appel à Jev, lus dans les paramètres."""
+    text = json.dumps(p, ensure_ascii=False)
+    via = "OpenRouter" if "openrouter" in text.lower() else ("TypeSafe" if "typesafe.ai" in text.lower() else "")
+    model = re.search(r"(~?typesafe/jev[\w.-]*|jev-(?:latest|preview|[\d.]+))", text)
+    qs = re.findall(r"\\?[\"']?([A-Za-z_][\w]*)\\?[\"']?\s*:\s*\{\s*\\?[\"']?type\\?[\"']?\s*:\s*\\?[\"'](noul|choice|score)", text)
+    parts = ["appel à Jev" + (f" via {via}" if via else "")]
+    if model:
+        parts.append(f"modèle {model.group(1)}")
+    if qs:
+        parts.append("questions : " + ", ".join(f"{q} ({t})" for q, t in list(dict.fromkeys(qs))[:10]))
+    elif "/chat/completions" in text:
+        parts.append("par /chat/completions (Jev répond d'ordinaire sur /systemone : vérifiez que cet appel fonctionne)")
+    return " ; ".join(parts)
+
+
 def classify(n: dict[str, Any]) -> str:
     t = n.get("type", "")
     p = n.get("parameters") or {}
@@ -130,7 +163,8 @@ def classify(n: dict[str, Any]) -> str:
         return "note"
     if t == "n8n-nodes-base.webhook" or "trigger" in t.lower():
         return "declencheur"
-    if t == "n8n-nodes-base.httpRequest" and JEV_HINT in url:
+    calls = t in ("n8n-nodes-base.httpRequest", "n8n-nodes-base.openAi") or "langchain" in t
+    if calls and JEV_RE.search(REF_RE.sub("", json.dumps(p, ensure_ascii=False))):
         return "jev"
     if "langchain" in t or t == "n8n-nodes-base.openAi" or (t == "n8n-nodes-base.httpRequest" and any(h in url for h in LLM_HOSTS)):
         return "llm"
@@ -151,6 +185,7 @@ def analyse(wf: dict[str, Any]) -> dict[str, Any]:
     by_name = {n.get("name"): n for n in nodes}
     groups: dict[str, list[dict[str, Any]]] = {k: [] for k in ("declencheur", "llm", "jev", "decision", "code", "action")}
     candidats: list[str] = []
+    jev_calls: list[str] = []
     for n in nodes:
         kind = classify(n)
         if kind == "note":
@@ -163,15 +198,22 @@ def analyse(wf: dict[str, Any]) -> dict[str, Any]:
             item["detail"] = _llm_prompt(p) or (f"modèle {_txt(p.get('model'), 60)}" if p.get("model") else "")
             short = _short(t)
             cats = _categories(p)
-            if short in LLM_CLASSIFY:
+            said = name + " " + item["detail"]
+            if VISION_RE.search(said):
+                candidats.append(f"« {name} » lit une image ou un document : Jev ne lit que du texte, ce nœud reste en amont "
+                                 "(il fournit le texte que Jev jugera).")
+            elif short in LLM_CLASSIFY:
                 candidats.append(f"« {name} » classe par LLM ({', '.join(cats) or short}) : une question Jev « choix parmi des mots » "
                                  "fait le même tri, sans texte généré.")
             elif short in LLM_EXTRACT:
                 candidats.append(f"« {name} » extrait des valeurs par LLM : si elles sont dans le texte, du code les trouve et une "
                                  "question « choix dans une liste » choisit la bonne.")
-            elif any(classify(by_name.get(x) or {}) == "decision" for x in nexts.get(name, [])):
+            elif _leads_to_decision(name, nexts, by_name):
                 candidats.append(f"« {name} » produit ce que teste une condition juste après : c'est une décision, "
                                  "Jev la rend en probabilités avec des seuils réglables.")
+            elif CLASSIFY_RE.search(said):
+                candidats.append(f"« {name} » semble juger ou classer (d'après son nom ou sa consigne) : une question Jev "
+                                 "(oui/non, choix parmi des mots ou score) peut le remplacer, sans texte généré.")
             else:
                 candidats.append(f"« {name} » rédige ou transforme du texte : il reste un LLM (LLM de route dans le builder).")
             if cats:
@@ -182,10 +224,17 @@ def analyse(wf: dict[str, Any]) -> dict[str, Any]:
         elif kind == "code":
             item["detail"] = _txt(p.get("jsCode") or p.get("functionCode") or p.get("assignments") or p.get("values") or "", 300)
         elif kind == "jev":
-            item["detail"] = "appel à Jev"
+            item["detail"] = _jev_detail(p)
+            jev_calls.append(name)
         elif kind == "action":
             item["detail"] = _txt(p.get("url") or p.get("operation") or p.get("resource") or "", 120)
         groups[kind].append(item)
+    if jev_calls:
+        candidats.insert(0, (f"{len(jev_calls)} appels à Jev ({', '.join(jev_calls[:8])}) : " if len(jev_calls) > 1 else
+                             f"Un appel à Jev (« {jev_calls[0]} ») : ") +
+                         "leurs questions deviennent des questions de la fiche, " +
+                         ("posées toutes en un seul appel (moins d'attente et une seule facture), " if len(jev_calls) > 1 else "") +
+                         "et le code qui lit leurs réponses devient des seuils et des règles réglables.")
     return {"nom": wf.get("name") or "Workflow sans nom", "noeuds": sum(len(v) for v in groups.values()), **groups,
             "candidats": candidats[:30], "actif": bool(wf.get("active"))}
 
