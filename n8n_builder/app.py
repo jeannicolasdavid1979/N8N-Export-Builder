@@ -70,6 +70,9 @@ def create_app(data_dir: str | None = None, secret_key: str | None = None, passw
             if not ok:
                 return Response("Authentification requise", 401, {"WWW-Authenticate": 'Basic realm="N8N Export Builder"'})
         resp = await call_next(request)
+        if request.url.path.startswith("/static/"):
+            # Toujours revalider : une mise à jour se voit sans vider le cache du navigateur.
+            resp.headers["Cache-Control"] = "no-cache"
         resp.headers["X-Content-Type-Options"] = "nosniff"
         resp.headers["X-Frame-Options"] = "DENY"
         resp.headers["Referrer-Policy"] = "no-referrer"

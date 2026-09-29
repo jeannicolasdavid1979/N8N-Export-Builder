@@ -6,12 +6,12 @@
 
 Installe N8N Export Builder sur ce VPS, à côté de n8n, sans rien casser de l'existant.
 
-Contexte : c'est un service web Python (FastAPI) qui garde des clés d'API chiffrées. Il ne doit jamais être exposé sans mot de passe ni sans HTTPS. Dépôt : https://github.com/jeannicolasdavid1979/N8N-Export-Builder, branche `claude/keen-noether-rm1low`. Guide de référence dans le dépôt : `docs/installation-vps.md`.
+Contexte : c'est un service web Python (FastAPI) qui garde des clés d'API chiffrées. Il ne doit jamais être exposé sans mot de passe ni sans HTTPS. Dépôt : https://github.com/jeannicolasdavid1979/N8N-Export-Builder, branche `main`. Guide de référence dans le dépôt : `docs/installation-vps.md`.
 
 Étapes :
 
 1. Reconnaissance, sans rien modifier : système, Docker et Docker Compose présents ou non, ports déjà occupés (`ss -ltnp`), comment n8n tourne (Docker, service, adresse interne, adresse publique), quel proxy HTTPS est en place (Caddy, Nginx, Traefik) et comment il est configuré. Rapporte ce que tu trouves avant de continuer.
-2. Clone le dépôt dans `/opt/n8n-export-builder` sur la branche indiquée.
+2. Clone le dépôt dans `/opt/n8n-export-builder` (branche `main`).
 3. Crée `.env` à partir de `.env.example`, en droits 600 :
    - `N8NB_PASSWORD` : 32 caractères aléatoires (`openssl rand -base64 24`) ;
    - `N8NB_SECRET_KEY` : clé Fernet (`python3 -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())"`, ou `openssl rand -base64 32 | tr '+/' '-_'`).

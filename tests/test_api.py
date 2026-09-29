@@ -348,3 +348,10 @@ def test_fiche_can_use_jev_through_openrouter(tmp_path, mock):
     f["jev_fournisseur"] = "openrouter"
     r = c.post("/api/jevlab/compile", json={"fiche": f}).json()
     assert r["spec"]["jev_provider"] == "openrouter" and r["spec"]["model"] == "~typesafe/jev-latest"
+
+
+def test_static_files_are_revalidated_and_version_is_visible(tmp_path, mock):
+    from n8n_builder import __version__
+    c, _ = make(tmp_path, mock)
+    assert c.get("/static/app.js").headers["cache-control"] == "no-cache"
+    assert c.get("/api/health").json()["version"] == __version__
