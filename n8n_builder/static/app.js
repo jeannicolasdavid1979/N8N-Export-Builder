@@ -896,6 +896,11 @@ function importResult(e, src, dlg) {
     return card;
   }
   if (o && o.erreur) put(card, h('div', { class: 'notice warn small', text: o.erreur + ' Le workflow est analysé comme un workflow fait à la main.' }));
+  const from0 = src.iid ? { instance: src.iid, id: src.wid } : { texte: src.texte, index: src.index };
+  put(card, h('div', { class: 'notice ok stack' },
+    h('div', {}, h('b', { text: 'Garder ce workflow tel quel ' }), 'et choisir ce qui se branche sur chaque appel : modèle et fournisseur des LLM, modèle de Jev, chemins des webhooks.'),
+    h('div', {}, h('button', { class: 'primary', text: '🔌 Régler ses branchements', onclick: () => openBranchements(e.nom, src, from0, dlg) }))),
+    h('div', { class: 'small faint', text: 'Ou bien, plus bas : reprendre ses décisions dans le Labo Jev pour les régler et les tester.' }));
   put(card, h('div', { class: 'chips' }, IMPORT_GROUPS.map(([k, icon, , one, many]) => a[k].length ? chip(icon, `${a[k].length} ${a[k].length > 1 ? many : one}`) : null)));
   put(card, a.candidats.length
     ? h('div', { class: 'stack' }, h('b', { class: 'small', text: 'Ce que Jev peut reprendre :' }), h('ul', { class: 'small' }, a.candidats.map(c => h('li', { text: c }))))
@@ -945,6 +950,119 @@ function importResult(e, src, dlg) {
     } }), status),
     h('p', { class: 'small faint', text: 'Votre workflow d\'origine n\'est pas modifié : l\'automate converti sera envoyé comme un nouveau workflow.' }));
   return card;
+}
+
+
+// Branchements d'un workflow gardé tel quel ----------------------------------------------------------------
+// Le workflow reste celui de n8n : on choisit seulement ce qui se branche sur chaque prise (modèle, fournisseur,
+// chemin de webhook), puis on le réécrit sur place ou en copie.
+
+async function openBranchements(nom, src, from, dlg) {
+  let data;
+  try { data = await api('POST', '/api/import/branchements', from); } catch (e) { return toast(e.message, true); }
+  const P = data.branchements;
+  const edits = {};
+  const chat = S.data.providers.filter(p => p.kind === 'chat' && p.auth !== 'anthropic');
+  const body = h('div', { class: 'dlg stack' });
+  const recap = h('div', { class: 'stack' });
+  const result = h('div');
+  const changes = () => P.flatMap(p => {
+    const e = edits[p.id];
+    if (!e) return [];
+    const c = { id: p.id };
+    if (p.type === 'webhook') { if (e.valeur !== undefined && e.valeur !== p.valeur) c.valeur = e.valeur; }
+    else {
+      if (e.fournisseur && e.fournisseur !== p.fournisseur) c.fournisseur = e.fournisseur;
+      if (e.modele && e.modele !== p.modele) c.modele = e.modele;
+    }
+    return Object.keys(c).length > 1 ? [c] : [];
+  });
+  const drawRecap = () => {
+    const cs = changes();
+    put(clear(recap), cs.length
+      ? h('div', { class: 'notice info small stack' }, h('b', { text: `${cs.length} changement${cs.length > 1 ? 's' : ''} prêt${cs.length > 1 ? 's' : ''} :` }),
+        h('ul', {}, cs.map(c => { const p = P.find(x => x.id === c.id); return h('li', { text: `« ${p.noeud} » : ` + [c.fournisseur ? `fournisseur ${c.fournisseur}` : '', c.modele ? `modèle ${c.modele}` : '', c.valeur !== undefined ? `chemin /${c.valeur}` : ''].filter(Boolean).join(', ') }); })))
+      : h('p', { class: 'small faint', text: 'Aucun changement pour l\'instant : choisissez un modèle ou un fournisseur sur une prise.' }));
+  };
+  const set = (id, k, v) => { edits[id] = { ...(edits[id] || {}), [k]: v }; drawRecap(); };
+  const provLabel = id => (S.data.providers.find(p => p.id === id) || {}).label || id || 'inconnu';
+
+  const jevCard = p => {
+    const models = (data.modeles_jev[p.fournisseur] || []);
+    const inp = h('input', { value: p.modele, list: 'dl-jev-' + p.fournisseur, oninput: e => set(p.id, 'modele', e.target.value.trim()) });
+    return h('div', { class: 'lever stack' },
+      h('div', { class: 'row between' }, h('b', { text: p.ou === 'code' ? `🧠 Modèle Jev de ${p.appels.length} appel${p.appels.length > 1 ? 's' : ''}` : `🧠 ${p.noeud}` }),
+        h('span', { class: 'badge', text: 'via ' + provLabel(p.fournisseur) })),
+      p.ou === 'code' ? h('div', { class: 'small muted', text: `Écrit ${p.occurrences} fois dans le nœud de code « ${p.noeud} », pour : ${p.appels.join(', ')}. Un seul choix les change tous.` }) : null,
+      h('div', { class: 'row' }, h('span', { class: 'small', text: 'Modèle' }), inp, h('datalist', { id: 'dl-jev-' + p.fournisseur }, models.map(m => h('option', { value: m })))),
+      h('div', { class: 'small faint', text: 'jev-latest suit chaque nouvelle version ; une version figée (1.13) garde des seuils stables.' }));
+  };
+  const llmCard = p => {
+    const e = () => edits[p.id] || {};
+    const provNow = () => e().fournisseur || p.fournisseur;
+    const warn = h('div');
+    const modelBox = h('div', { style: 'flex:1' });
+    const drawModel = () => put(clear(modelBox), provNow() && S.data.providers.some(x => x.id === provNow())
+      ? modelInput(provNow(), e().modele ?? p.modele ?? '', v => set(p.id, 'modele', v.trim()))
+      : h('input', { value: e().modele ?? p.modele ?? '', oninput: ev => set(p.id, 'modele', ev.target.value.trim()) }));
+    const drawWarn = () => {
+      const np = provNow();
+      put(clear(warn), np !== p.fournisseur ? h('div', { class: 'notice warn small', text: `Changement de fournisseur : l'identifiant « ${p.identifiant || 'actuel'} » est retiré de ce nœud (une clé ne part jamais vers un autre fournisseur). ` +
+        ((S.data.providers.find(x => x.id === np) || {}).configured ? `Le builder branche sa clé ${provLabel(np)} à l'envoi.` : `Aucune clé ${provLabel(np)} dans le builder : choisissez l'identifiant dans n8n après l'envoi.`) +
+        ' Vérifiez aussi que ce fournisseur accepte le corps de la requête (format de réponse imposé, images…).' }) : null);
+    };
+    drawModel(); drawWarn();
+    return h('div', { class: 'lever stack' },
+      h('div', { class: 'row between' }, h('b', { text: '✍ ' + p.noeud }), h('span', { class: 'badge', text: p.ou === 'corps' ? 'modèle dans le corps' : (p.ou === 'param' ? 'modèle du nœud' : 'modèle non trouvé') })),
+      p.identifiant ? h('div', { class: 'small faint', text: `Identifiant actuel : ${p.identifiant}` }) : null,
+      p.modele ? h('div', { class: 'row' },
+        field('Fournisseur', p.fournisseur_modifiable
+          ? selectEl(chat.map(x => [x.id, x.label + (x.configured ? '' : ' (sans clé)')]), p.fournisseur, v => { set(p.id, 'fournisseur', v); drawModel(); drawWarn(); })
+          : h('div', { class: 'small', style: 'padding-top:8px', text: provLabel(p.fournisseur) + ' (fixe pour ce type de nœud)' }), 'w180'),
+        h('div', { class: 'field grow' }, h('label', { text: 'Modèle' }), modelBox))
+        : h('div', { class: 'small muted', text: 'Le modèle est calculé ailleurs (expression) : réglez-le dans n8n.' }),
+      warn);
+  };
+  const hookCard = p => h('div', { class: 'row' }, h('span', { class: 'small', style: 'min-width:160px', text: '🚉 ' + p.noeud }),
+    h('span', { class: 'small faint', text: '/webhook/' }), h('input', { value: p.valeur, style: 'flex:1', oninput: e => set(p.id, 'valeur', e.target.value.trim()) }));
+
+  const send = async (update, iid) => {
+    put(clear(result), h('p', { class: 'muted', text: 'Envoi…' }));
+    try {
+      const r = await api('POST', `/api/n8n/${iid}/adopter`, { ...from, changements: changes(), update_id: update ? src.wid : null });
+      put(clear(result), h('div', { class: 'notice ok stack' },
+        h('div', {}, r.remplace ? 'Workflow mis à jour dans n8n. ' : 'Copie créée dans n8n. ', h('a', { href: r.editor_url, target: '_blank', rel: 'noopener', text: 'Ouvrir dans n8n' })),
+        r.changements.length ? h('ul', { class: 'small' }, r.changements.map(c => h('li', { text: c }))) : h('div', { class: 'small', text: 'Aucun changement appliqué.' })),
+        r.notes.length ? h('div', { class: 'notice warn small' }, h('ul', {}, r.notes.map(n => h('li', { text: n })))) : null);
+    } catch (e) { put(clear(result), h('div', { class: 'notice err', text: e.message })); }
+  };
+  const jev = P.filter(p => p.type === 'jev' && (p.modele || !p.via_code)), llm = P.filter(p => p.type === 'llm'), hooks = P.filter(p => p.type === 'webhook');
+  let iid = src.iid || (S.data.instances[0] || {}).id;
+  put(body,
+    h('div', { class: 'row between' }, h('h2', { style: 'margin:0', text: `🔌 Branchements de « ${data.nom} »` }), h('button', { class: 'small', text: 'Fermer', onclick: () => dlg.close() })),
+    tuto('branchements', 'régler ses branchements', [
+      ['Votre workflow reste ', h('b', { text: 'celui de n8n' }), ' : rien n\'est reconstruit. Chaque appel à un modèle est une ', h('b', { text: 'prise' }), ', où vous branchez le modèle de votre choix (vos favoris ★ en tête).'],
+      ['Un modèle écrit dans un nœud de code (un corps préparé pour plusieurs appels) se règle en une fois pour tous ces appels.'],
+      ['Seule la valeur choisie est remplacée, là où elle est écrite. Changer de fournisseur retire l\'ancien identifiant : une clé ne part jamais ailleurs.'],
+      ['Mettez à jour le workflow sur place, envoyez une copie pour essayer sans risque, ou téléchargez le JSON.'],
+    ]),
+    jev.length ? h('div', { class: 'stack' }, h('h3', { text: 'Jev' }), jev.map(p => p.modele ? jevCard(p) : h('div', { class: 'small muted', text: `🧠 ${p.noeud} : modèle non trouvé, à régler dans n8n.` }))) : null,
+    llm.length ? h('div', { class: 'stack' }, h('h3', { text: 'LLM' }), llm.map(llmCard)) : null,
+    hooks.length ? h('div', { class: 'stack' }, h('h3', {}, 'Webhooks ', info('Changer un chemin change l\'adresse d\'appel : ce qui appelait l\'ancienne adresse ne fonctionnera plus.')), hooks.map(hookCard)) : null,
+    !P.length ? h('p', { class: 'muted', text: 'Aucune prise trouvée : ce workflow n\'appelle ni LLM ni Jev, et n\'a pas de webhook.' }) : null,
+    recap,
+    h('div', { class: 'row' },
+      src.iid ? h('button', { class: 'primary', text: 'Mettre à jour ce workflow dans n8n', onclick: () => { if (confirm(`Réécrire « ${data.nom} » dans n8n avec ces branchements ?${data.actif ? ' Il est actif : il le restera.' : ''}`)) send(true, src.iid); } }) : null,
+      S.data.instances.length ? h('span', { class: 'row' },
+        !src.iid ? selectEl(S.data.instances.map(i => [i.id, i.label]), iid, v => { iid = v; }) : null,
+        h('button', { class: src.iid ? '' : 'primary', text: src.iid ? 'Envoyer une copie' : 'Envoyer vers n8n', onclick: () => send(false, iid) })) : null,
+      h('button', { text: 'Télécharger le JSON', onclick: async () => {
+        try { const r = await api('POST', '/api/import/appliquer', { ...from, changements: changes() }); download(slug(data.nom) + '.json', r.workflow); }
+        catch (e) { toast(e.message, true); }
+      } })),
+    result);
+  drawRecap();
+  put(clear(dlg), body);
 }
 
 // Modèles LLM -----------------------------------------------------------------------------------------

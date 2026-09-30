@@ -21,7 +21,7 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, assist, economy, fiches, generator, hubexport, importer, jev, jevlab, skills, synthese, templates
+from . import __version__, assist, branchements, economy, fiches, generator, hubexport, importer, jev, jevlab, skills, synthese, templates
 from . import providers as P
 from .n8n_client import KINDS, N8nClient, N8nError, normalize_url
 from .spec import JEV_MODELS, JEV_PROVIDERS, JEV_URL, SpecError, question_vars, routes_of, uses_jev, validate
@@ -459,6 +459,23 @@ def create_app(data_dir: str | None = None, secret_key: str | None = None, passw
         except (IndexError, ValueError, TypeError) as e:
             raise HTTPException(400, "Workflow introuvable dans le fichier.") from e
 
+    @app.post("/api/import/branchements")
+    async def import_branchements(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        """Les prises d'un workflow gardé tel quel : LLM, Jev (même quand le modèle est écrit dans un nœud de code), webhooks."""
+        wf = await import_source(body)
+        return {"nom": wf.get("name") or "Workflow", "actif": bool(wf.get("active")), "branchements": branchements.lister(wf),
+                "modeles_jev": {k: branchements.modeles_jev(k) for k in JEV_PROVIDERS}}
+
+    @app.post("/api/import/appliquer")
+    async def import_appliquer(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        """Aperçu ou téléchargement : le workflow avec les choix appliqués, sans rien envoyer."""
+        wf = await import_source(body)
+        try:
+            out, done, notes = branchements.appliquer(wf, body.get("changements") or [])
+        except branchements.BranchementErreur as e:
+            raise HTTPException(400, str(e)) from e
+        return {"workflow": {**branchements.payload(out), "pinData": {}}, "changements": done, "notes": notes}
+
     @app.post("/api/import/fiche")
     async def import_fiche(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
         """Sans IA : les questions Jev du workflow, telles quelles, dans une fiche du Labo Jev."""
@@ -480,6 +497,37 @@ def create_app(data_dir: str | None = None, secret_key: str | None = None, passw
         r = await jevlab.llm_fill(pid, store.provider_key(pid), model, f"{importer.CONVERT_BRIEF} Nom : « {a['nom']} ».",
                                   importer.summary(a), draft, store.provider(pid).get("base_url") if p.base_editable else None)
         return {**r, "analyse": a}
+
+    @app.post("/api/n8n/{iid}/adopter")
+    async def adopter(iid: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        """Réécrit dans n8n un workflow gardé tel quel, avec les branchements choisis : sur place ou en copie."""
+        inst = instance_or_404(iid)
+        wf = await import_source(body)
+        changes = body.get("changements") or []
+        prises = {p["id"]: p for p in branchements.lister(wf)}
+        async with n8n(inst) as c:
+            creds: dict[str, dict[str, str]] = {}
+            for ch in changes:
+                p = prises.get(ch.get("id")) or {}
+                pid = ch.get("fournisseur")
+                if pid and pid != p.get("fournisseur") and pid in P.BY_ID and P.BY_ID[pid].auth != "none" and pid not in creds:
+                    key = store.provider_key(pid)
+                    if key:
+                        creds[pid] = await ensure_credential(c, iid, "llm:" + pid, f"LLM {P.BY_ID[pid].label} (builder)", "httpBearerAuth",
+                                                             {"token": key}, hashlib.sha256(key.encode()).hexdigest()[:16])
+            try:
+                out, done, notes = branchements.appliquer(wf, changes, creds)
+            except branchements.BranchementErreur as e:
+                raise HTTPException(400, str(e)) from e
+            data = branchements.payload(out)
+            target = body.get("update_id")
+            if target:
+                res = await c.update_workflow(str(target), data)
+            else:
+                data["name"] = str(body.get("nom") or f"{data['name']} (branchements)")[:120]
+                res = await c.create_workflow(data)
+            wid = str(res.get("id") or target)
+            return {"id": wid, "editor_url": c.editor_url(wid), "changements": done, "notes": notes, "remplace": bool(target)}
 
     async def ensure_credential(c: N8nClient, iid: str, slot: str, name: str, ctype: str, data: dict[str, Any],
                                 fingerprint: str) -> dict[str, str]:

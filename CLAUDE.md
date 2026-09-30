@@ -23,6 +23,7 @@ Interface, documentation et messages de commit en français. Pas de tiret cadrat
 - `n8n_builder/fiches.py` : fiches types, chacune avec des cas de test.
 - Salle de réglage (`static/app.js`) : rejoue le nœud « Décision déterministe » en remplaçant seulement la ligne `const CFG = …;` avant `function flatten`. Ne pas changer cette forme sans adapter `reglageLab` ; `tests/test_jevlab.py` la vérifie.
 - `n8n_builder/importer.py` : import depuis n8n. Carte d'origine (note `generator.N_ORIGIN`), reconstruction des envois plus anciens depuis le code généré, analyse des workflows faits à la main. Tout changement de forme du code de « Préparer les données » ou de « Décision déterministe » doit rester lisible par `reconstruct` : `tests/test_import.py` régénère les 50 modèles et compare.
+- `n8n_builder/branchements.py` : réglage d'un workflow gardé tel quel. Remplacements exacts seulement (l'ancien identifiant de modèle entre guillemets après `model:`, le chemin du webhook) ; un changement de fournisseur retire toujours l'ancien identifiant. Voir `tests/test_branchements.py`.
 - `n8n_builder/hubexport.py` : OpenAPI, SKILL.md, kit (format 1) et workflow. Tout changement se vérifie avec les lecteurs du Hub (`agent_hub.studio.apis.preview`, `kitformat.parse_kit`, `skills.parse_skill_md`), voir `tests/test_jevlab.py`.
 
 ## Banque de skills : à jour à chaque poussée
