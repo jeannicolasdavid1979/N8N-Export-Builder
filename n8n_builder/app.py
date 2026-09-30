@@ -446,23 +446,39 @@ def create_app(data_dir: str | None = None, secret_key: str | None = None, passw
             raise HTTPException(400, str(e)) from e
         return {"workflows": [importer.entry(w) for w in wfs]}
 
+    async def import_source(body: dict[str, Any]) -> dict[str, Any]:
+        """Le workflow à convertir : lu dans l'instance, ou dans le fichier envoyé (avec son rang)."""
+        if body.get("instance") and body.get("id"):
+            async with n8n(instance_or_404(str(body["instance"]))) as c:
+                return await c.get_workflow(str(body["id"]))
+        try:
+            wfs = importer.parse(body.get("workflow") if body.get("workflow") is not None else body.get("texte") or "")
+            return wfs[int(body.get("index") or 0)]
+        except importer.ImportErreur as e:
+            raise HTTPException(400, str(e)) from e
+        except (IndexError, ValueError, TypeError) as e:
+            raise HTTPException(400, "Workflow introuvable dans le fichier.") from e
+
+    @app.post("/api/import/fiche")
+    async def import_fiche(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        """Sans IA : les questions Jev du workflow, telles quelles, dans une fiche du Labo Jev."""
+        wf = await import_source(body)
+        qs = importer.jev_questions(wf)
+        if not qs:
+            raise HTTPException(400, "Aucune question Jev lisible dans ce workflow.")
+        return {"fiche": jevlab.validate_fiche(importer.fiche_from_questions(wf.get("name") or "Workflow importé", qs)),
+                "questions": len(qs)}
+
     @app.post("/api/import/convertir")
     async def import_convertir(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
         pid, p, model = assistant_model(body)
-        if body.get("instance") and body.get("id"):
-            async with n8n(instance_or_404(str(body["instance"]))) as c:
-                wf = await c.get_workflow(str(body["id"]))
-        else:
-            try:
-                wfs = importer.parse(body.get("workflow") if body.get("workflow") is not None else body.get("texte") or "")
-                wf = wfs[int(body.get("index") or 0)]
-            except importer.ImportErreur as e:
-                raise HTTPException(400, str(e)) from e
-            except (IndexError, ValueError, TypeError) as e:
-                raise HTTPException(400, "Workflow introuvable dans le fichier.") from e
+        wf = await import_source(body)
         a = importer.analyse(wf)
+        qs = importer.jev_questions(wf)
+        # Questions déjà écrites : reprises telles quelles et verrouillées, l'IA ne propose que résultats et règles.
+        draft = jevlab.validate_fiche(importer.fiche_from_questions(a["nom"], qs)) if qs else None
         r = await jevlab.llm_fill(pid, store.provider_key(pid), model, f"{importer.CONVERT_BRIEF} Nom : « {a['nom']} ».",
-                                  importer.summary(a), None, store.provider(pid).get("base_url") if p.base_editable else None)
+                                  importer.summary(a), draft, store.provider(pid).get("base_url") if p.base_editable else None)
         return {**r, "analyse": a}
 
     async def ensure_credential(c: N8nClient, iid: str, slot: str, name: str, ctype: str, data: dict[str, Any],

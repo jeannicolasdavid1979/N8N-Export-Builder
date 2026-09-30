@@ -169,3 +169,69 @@ def test_jev_calls_are_recognised_however_they_are_made():
     assert any("« OCR Vision Mistral » lit une image" in x for x in c)
     assert any("« Contrôle anomalie » semble juger" in x for x in c)
     assert any("« Résumé » rédige" in x for x in c)
+
+
+BUILD_STATE = r"""
+const meta = $('Extract & Precompute').first().json;
+// Questions posées à Jev : une par appel
+const q1 = { doc_type: { type: 'choice', instructions: 'Qualifiez la piece.', criteria: { facture_achat: 'Facture fournisseur', ticket_caisse: 'Ticket', other: 'Autre' } } };
+const q2 = { fraude: { type: 'noul', instructions: "Signes de fraude ?" }, /* commentaire */ anomalie: { type: 'choice', instructions: 'Anomalie ?', criteria: { aucune: 'RAS', doublon: 'Doublon', } } };
+const qx = { piege: { type: 'choice', instructions: `Nom ${meta.filename}`, criteria: { a: 'A' } } };
+return [{ json: { state: meta,
+  jev1_body: JSON.stringify({ model: 'typesafe/jev-1.13', state: meta, questions: q1 }),
+  jev2_body: JSON.stringify({ model: 'typesafe/jev-1.13', state: meta, questions: q2 }),
+  jev3_body: JSON.stringify({ model: 'typesafe/jev-1.13', state: meta, questions: { niveau: { type: 'score', instructions: 'Gravite', criteria: ['faible', 'moyenne', 'forte'] } } })
+} }];
+"""
+
+
+def _decisions_node(name, var):
+    return {"name": name, "type": "n8n-nodes-base.httpRequest", "parameters": {
+        "method": "POST", "url": "https://openrouter.ai/api/alpha/decisions", "sendBody": True, "contentType": "raw",
+        "rawContentType": "application/json", "body": "={{ $json.%s }}" % var}}
+
+
+COMPTA = {"name": "Compta (synthétique)", "nodes": [
+    {"name": "Webhook Upload", "type": "n8n-nodes-base.webhook", "parameters": {"path": "upload"}},
+    {"name": "Webhook Status", "type": "n8n-nodes-base.webhook", "parameters": {"path": "status"}},
+    {"name": "OCR Vision", "type": "n8n-nodes-base.httpRequest", "parameters": {"url": "https://openrouter.ai/api/v1/chat/completions", "jsonBody": "={{ { model: 'openai/gpt-4o-mini' } }}"}},
+    {"name": "Build State", "type": "n8n-nodes-base.code", "parameters": {"jsCode": BUILD_STATE}},
+    _decisions_node("Jev 1 Qualification", "jev1_body"), _decisions_node("Jev 2 Anomalie", "jev2_body"), _decisions_node("Jev 3 Gravité", "jev3_body"),
+    {"name": "Aggregate", "type": "n8n-nodes-base.code", "parameters": {"jsCode": "const r1 = $('Jev 1 Qualification').first().json.answers;"}},
+    {"name": "Save", "type": "n8n-nodes-base.readWriteFile", "parameters": {"operation": "write"}},
+], "connections": {}}
+
+
+def test_questions_written_in_code_are_read_without_running_it():
+    a = importer.analyse(COMPTA)
+    assert [x["nom"] for x in a["jev"]] == ["Jev 1 Qualification", "Jev 2 Anomalie", "Jev 3 Gravité"]
+    assert [x["nom"] for x in a["llm"]] == ["OCR Vision"]
+    qs = {q["id"]: q for q in a["questions_jev"]}
+    assert list(qs) == ["doc_type", "fraude", "anomalie", "niveau"]  # « piege » : gabarit ${...}, ignoré
+    assert qs["doc_type"]["noeud"] == "Jev 1 Qualification" and qs["anomalie"]["noeud"] == "Jev 2 Anomalie"
+    assert qs["niveau"]["noeud"] == "Jev 3 Gravité" and qs["niveau"]["criteria"] == ["faible", "moyenne", "forte"]
+    assert qs["anomalie"]["criteria"] == {"aucune": "RAS", "doublon": "Doublon"}
+    assert "questions : fraude (noul), anomalie (choice)" in a["jev"][1]["detail"]
+    assert a["candidats"][0].startswith("3 appels à Jev") and any("fait plus que décider" in c for c in a["candidats"])
+    f = jevlab.validate_fiche(importer.fiche_from_questions("Compta", importer.jev_questions(COMPTA)))
+    assert [q["id"] for q in f["questions"]] == ["doc_type", "fraude", "anomalie", "niveau"]
+    assert [o["mot"] for o in f["questions"][0]["options"]] == ["facture_achat", "ticket_caisse", "other"]
+    assert f["ia"]["questions"]["origine"] == "humain"
+    jevlab.compile_fiche(f)
+
+
+def test_import_fiche_route_and_locked_questions_in_ai_conversion(tmp_path, mock):
+    c = make(tmp_path)
+    r = c.post("/api/import/fiche", json={"texte": json.dumps(COMPTA)})
+    assert r.status_code == 200 and r.json()["questions"] == 4
+    assert c.post("/api/import/fiche", json={"texte": json.dumps(HANDMADE)}).status_code == 400
+    # l'IA propose une fiche qui réécrit les questions : elles reviennent telles quelles, avec leur badge humain
+    ai = r.json()["fiche"]
+    ai = {**ai, "questions": [{"id": "autre", "type": "noul", "question": "Inventée ?", "seuil_oui": 70, "seuil_non": 30}],
+          "regles": [], "par_defaut": "traiter"}
+    mock.post("https://openrouter.ai/api/v1/chat/completions").respond(json={"choices": [{"message": {"content": json.dumps(
+        {"fiche": ai, "pourquoi": {"questions": "Je les ai simplifiées.", "resultats": "Deux voies."}})}}]})
+    c.put("/api/providers/openrouter", json={"key": "sk-or-v1-test"})
+    f = c.post("/api/import/convertir", json={"provider": "openrouter", "model": "m", "texte": json.dumps(COMPTA)}).json()["fiche"]
+    assert [q["id"] for q in f["questions"]] == ["doc_type", "fraude", "anomalie", "niveau"]
+    assert f["ia"]["questions"]["origine"] == "humain" and f["ia"]["resultats"]["origine"] == "ia"

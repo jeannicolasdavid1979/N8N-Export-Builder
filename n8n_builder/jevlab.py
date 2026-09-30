@@ -485,8 +485,10 @@ def set_path(f: dict[str, Any], path: str, value: Any) -> dict[str, Any]:
 
 def _mark(f: dict[str, Any], pourquoi: dict[str, Any], paths: list[str] | None = None) -> dict[str, Any]:
     ia = dict(f.get("ia") or {})
+    human = [k for k, v in ia.items() if v.get("origine") == "humain"]
     for k, v in (pourquoi or {}).items():
-        if isinstance(k, str) and isinstance(v, str):
+        # une case réglée par l'humain (ou contenue dans une telle case) garde son origine
+        if isinstance(k, str) and isinstance(v, str) and not any(k == h or k.startswith(h + ".") for h in human):
             ia[k] = {"origine": "ia", "pourquoi": v[:800]}
     for p in paths or []:
         ia.setdefault(p, {"origine": "ia", "pourquoi": ""})

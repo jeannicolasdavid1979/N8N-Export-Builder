@@ -20,7 +20,7 @@ LLM_HOSTS = ("openai.com", "anthropic.com", "openrouter.ai", "mistral.ai", "gene
 JEV_HINT = "systemone"
 # Jev se reconnaît à son adresse, à son fournisseur ou à son nom de modèle, où qu'ils soient dans les paramètres
 # (adresse en expression, corps JSON, nœud LangChain configuré sur OpenRouter).
-JEV_RE = re.compile(r"systemone|typesafe|\bjev[-_.](?:latest|preview|\d)", re.I)
+JEV_RE = re.compile(r"systemone|alpha/decisions|typesafe|\bjev[-_.](?:latest|preview|\d)", re.I)
 # Références à un autre nœud dans une expression n8n : $('Jev 1'), $node["Jev 1"] ; elles ne sont pas des appels.
 REF_RE = re.compile(r"\$\(\s*\\?['\"].*?\\?['\"]\s*\)|\$node\[\s*\\?['\"].*?\\?['\"]\s*\]")
 VISION_RE = re.compile(r"\bocr\b|vision|image|photo|scan|pdf|pixtral|llava", re.I)
@@ -229,14 +229,24 @@ def analyse(wf: dict[str, Any]) -> dict[str, Any]:
         elif kind == "action":
             item["detail"] = _txt(p.get("url") or p.get("operation") or p.get("resource") or "", 120)
         groups[kind].append(item)
+    qs = jev_questions(wf) if jev_calls or groups["code"] else []
+    for it in groups["jev"]:
+        mine = [f"{q['id']} ({q['type']})" for q in qs if q.get("noeud") == it["nom"]]
+        if mine and "questions :" not in it["detail"]:
+            it["detail"] += " ; questions : " + ", ".join(mine)
+    if len(groups["declencheur"]) > 1 or any(x["type"] in ("readWriteFile", "readBinaryFile", "writeBinaryFile", "ftp", "googleDrive")
+                                             for x in groups["action"]):
+        candidats.append(f"Ce workflow fait plus que décider ({len(groups['declencheur'])} déclencheur(s), fichiers, réponses) : "
+                         "le builder reprend la partie décision (questions Jev, seuils, règles) ; le reste reste dans n8n.")
     if jev_calls:
         candidats.insert(0, (f"{len(jev_calls)} appels à Jev ({', '.join(jev_calls[:8])}) : " if len(jev_calls) > 1 else
                              f"Un appel à Jev (« {jev_calls[0]} ») : ") +
-                         "leurs questions deviennent des questions de la fiche, " +
+                         "leurs questions deviennent des questions de la fiche (reprises telles quelles), " +
                          ("posées toutes en un seul appel (moins d'attente et une seule facture), " if len(jev_calls) > 1 else "") +
                          "et le code qui lit leurs réponses devient des seuils et des règles réglables.")
     return {"nom": wf.get("name") or "Workflow sans nom", "noeuds": sum(len(v) for v in groups.values()), **groups,
-            "candidats": candidats[:30], "actif": bool(wf.get("active"))}
+            "candidats": candidats[:30], "actif": bool(wf.get("active")),
+            "questions_jev": [{k: q[k] for k in ("id", "type", "instructions", "criteria", "noeud")} for q in qs]}
 
 
 def summary(a: dict[str, Any]) -> str:
@@ -250,6 +260,9 @@ def summary(a: dict[str, Any]) -> str:
             for it in a[k][:25]:
                 extra = f" ; catégories : {', '.join(it['categories'])}" if it.get("categories") else ""
                 lines.append(f"- {it['nom']} ({it['type']}) : {it.get('detail', '')}{extra}")
+    if a.get("questions_jev"):
+        lines.append("\nQuestions déjà posées à Jev (à reprendre telles quelles) :")
+        lines += [f"- {q['id']} ({q['type']}, nœud {q['noeud'] or '?'}) : {_txt(q['instructions'], 200)}" for q in a["questions_jev"]]
     if a["candidats"]:
         lines.append("\nPistes repérées :")
         lines += [f"- {c}" for c in a["candidats"]]
@@ -382,3 +395,196 @@ def reconstruct(wf: dict[str, Any]) -> dict[str, Any] | None:
     except SpecError as e:
         return {"erreur": f"Reconstruction impossible : {str(e)[:200]}"}
     return {"spec": spec, "fiche": None, "reconstruit": True, "modifications": modifications(wf, spec)}
+
+
+# Questions Jev écrites dans un workflow fait main -----------------------------------------------------------
+# Elles sont souvent déclarées en objets JavaScript dans un nœud de code : { doc_type: { type: 'choice', ... } }.
+# On les lit avec un petit lecteur d'objets littéraux qui n'exécute rien : chaînes, nombres, booléens, objets,
+# listes. Tout le reste (variable, appel, gabarit `...${x}`) rend la question illisible, et elle est ignorée.
+
+class _Literal:
+    def __init__(self, text: str, i: int):
+        self.t, self.i = text, i
+
+    def ws(self) -> None:
+        t = self.t
+        while self.i < len(t):
+            if t[self.i].isspace():
+                self.i += 1
+            elif t.startswith("//", self.i):
+                j = t.find("\n", self.i)
+                self.i = len(t) if j < 0 else j
+            elif t.startswith("/*", self.i):
+                j = t.find("*/", self.i)
+                self.i = len(t) if j < 0 else j + 2
+            else:
+                break
+
+    def value(self) -> Any:
+        self.ws()
+        c = self.t[self.i: self.i + 1]
+        if c == "{":
+            return self.obj()
+        if c == "[":
+            return self.arr()
+        if c in ("'", '"', "`"):
+            return self.string()
+        m = re.compile(r"-?\d+(?:\.\d+)?|true\b|false\b|null\b").match(self.t, self.i)
+        if not m:
+            raise ValueError("expression")
+        self.i = m.end()
+        return json.loads(m.group(0))
+
+    def string(self) -> str:
+        q = self.t[self.i]
+        self.i += 1
+        out = []
+        while self.i < len(self.t):
+            c = self.t[self.i]
+            if c == "\\":
+                nxt = self.t[self.i + 1: self.i + 2]
+                out.append({"n": "\n", "t": "\t", "r": ""}.get(nxt, nxt))
+                self.i += 2
+                continue
+            if c == q:
+                self.i += 1
+                return "".join(out)
+            if q == "`" and self.t.startswith("${", self.i):
+                raise ValueError("gabarit")
+            out.append(c)
+            self.i += 1
+        raise ValueError("chaîne")
+
+    def key(self) -> str:
+        self.ws()
+        if self.t[self.i: self.i + 1] in ("'", '"'):
+            return self.string()
+        m = re.compile(r"[A-Za-z_$][\w$]*").match(self.t, self.i)
+        if not m:
+            raise ValueError("clé")
+        self.i = m.end()
+        return m.group(0)
+
+    def obj(self) -> dict[str, Any]:
+        self.i += 1
+        out: dict[str, Any] = {}
+        while True:
+            self.ws()
+            if self.t[self.i: self.i + 1] == "}":
+                self.i += 1
+                return out
+            k = self.key()
+            self.ws()
+            if self.t[self.i: self.i + 1] != ":":
+                raise ValueError("deux-points")
+            self.i += 1
+            out[k] = self.value()
+            self.ws()
+            if self.t[self.i: self.i + 1] == ",":
+                self.i += 1
+
+    def arr(self) -> list[Any]:
+        self.i += 1
+        out: list[Any] = []
+        while True:
+            self.ws()
+            if self.t[self.i: self.i + 1] == "]":
+                self.i += 1
+                return out
+            out.append(self.value())
+            self.ws()
+            if self.t[self.i: self.i + 1] == ",":
+                self.i += 1
+
+
+Q_START = re.compile(r"""(?:["']?)([A-Za-z_][\w]*)(?:["']?)\s*:\s*\{\s*["']?type["']?\s*:\s*["'](noul|choice|score)["']""")
+
+
+def _texts(wf: dict[str, Any]) -> list[tuple[str, str]]:
+    out = []
+    for n in wf.get("nodes") or []:
+        p = n.get("parameters") or {}
+        for k in ("jsCode", "functionCode", "jsonBody", "body"):
+            if isinstance(p.get(k), str):
+                out.append((n.get("name", "?"), p[k]))
+    return out
+
+
+def jev_questions(wf: dict[str, Any]) -> list[dict[str, Any]]:
+    """Questions Jev lisibles dans le code et les corps de requête, rattachées au nœud qui les envoie si possible."""
+    found: dict[str, dict[str, Any]] = {}
+    texts = _texts(wf)
+    # quel nœud Jev envoie quel corps : body « {{ $json.jev1_body }} » et, dans le code, « jev1_body: ... questions: q1 »
+    jev_nodes = {n.get("name"): n for n in wf.get("nodes") or [] if classify(n) == "jev"}
+    body_of = {}
+    for name, n in jev_nodes.items():
+        m = re.search(r"\$json\.([A-Za-z_]\w*)", json.dumps(n.get("parameters") or {}))
+        if m:
+            body_of[m.group(1)] = name
+    for src, text in texts:
+        var_of: dict[str, str] = {}
+        for m in re.finditer(r"([A-Za-z_]\w*)\s*:\s*JSON\.stringify\(\{[^\n]*?questions\s*:\s*([A-Za-z_]\w*)", text):
+            if m.group(1) in body_of:
+                var_of[m.group(2)] = body_of[m.group(1)]
+        for m in Q_START.finditer(text):
+            qid, qtype = m.group(1), m.group(2)
+            if qid in found or qid in ("questions", "question"):
+                continue
+            brace = text.index("{", m.start(0) + len(qid))
+            try:
+                q = _Literal(text, brace).obj()
+            except (ValueError, IndexError):
+                continue
+            if q.get("type") != qtype or not isinstance(q.get("instructions"), (str, dict)):
+                continue
+            decl = re.findall(r"(?:const|let|var)\s+([A-Za-z_]\w*)\s*=\s*\{", text[:m.start()])
+            node = var_of.get(decl[-1]) if decl else None
+            if not node:  # question écrite directement dans le corps d'un appel : « jev7_body: ... questions: { ... } »
+                head = text[:m.start()].rsplit("\n", 1)[-1]
+                b = re.search(r"([A-Za-z_]\w*)\s*:\s*JSON\.stringify", head)
+                node = body_of.get(b.group(1)) if b else (src if src in jev_nodes else None)
+            found[qid] = {"id": qid, "type": qtype, "instructions": q.get("instructions"), "criteria": q.get("criteria"),
+                          "noeud": node, "source": src}
+    return list(found.values())[:60]
+
+
+def _slug_id(v: str) -> str:
+    s = re.sub(r"[^a-z0-9_]+", "_", v.lower()).strip("_")
+    return (s if s and s[0].isalpha() else "q_" + s)[:48] or "question"
+
+
+def fiche_from_questions(name: str, qs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Fiche du Labo Jev qui reprend les questions telles quelles, verrouillées comme réglées par l'humain.
+    Résultats de départ : traiter, ou revoir quand Jev hésite ; à affiner ensuite."""
+    questions, regles = [], []
+    for q in qs:
+        instr = q["instructions"] if isinstance(q["instructions"], str) else json.dumps(q["instructions"], ensure_ascii=False)
+        item: dict[str, Any] = {"id": _slug_id(q["id"]), "type": q["type"], "question": instr}
+        crit = q.get("criteria")
+        if q["type"] == "noul":
+            item.update(seuil_oui=70, seuil_non=30)
+            if isinstance(crit, dict):
+                item.update(oui_signifie=str(crit.get("true") or ""), non_signifie=str(crit.get("false") or ""))
+            regles.append({"si": [{"question": item["id"], "op": "est", "valeur": "a_verifier"}], "alors": "a_revoir",
+                           "pourquoi": f"Jev hésite sur {item['id']} : un humain vérifie."})
+        elif q["type"] == "choice":
+            opts = crit if isinstance(crit, dict) else {str(x): "" for x in crit or []}
+            item.update(options=[{"mot": _slug_id(str(k)), "description": str(v or "")} for k, v in opts.items()][:255],
+                        confiance_min=60, marge=0)
+            regles.append({"si": [{"question": item["id"], "op": "est", "valeur": "incertain"}], "alors": "a_revoir",
+                           "pourquoi": f"Confiance insuffisante sur {item['id']} : un humain vérifie."})
+        else:
+            item.update(niveaux=[str(x) for x in (crit if isinstance(crit, list) else ["Bas", "Moyen", "Haut"])][:10], confiance_min=50)
+            regles.append({"si": [{"question": item["id"], "op": "est", "valeur": "incertain"}], "alors": "a_revoir",
+                           "pourquoi": f"Confiance insuffisante sur {item['id']} : un humain vérifie."})
+        questions.append(item)
+    return {
+        "name": name, "objectif": f"Décisions Jev reprises du workflow n8n « {name} ».",
+        "entree": {"mode": "json", "field": "message", "fields": []}, "exemple": {},
+        "questions": questions,
+        "resultats": [{"id": "traiter", "label": "Traiter automatiquement", "consigne": ""},
+                      {"id": "a_revoir", "label": "À revoir par un humain", "consigne": "Vérifier les réponses de Jev avant de continuer."}],
+        "regles": regles, "par_defaut": "traiter", "si_jev_indisponible": "a_revoir",
+        "jev_fournisseur": "openrouter", "modele": "typesafe/jev-1.13", "tests": [],
+        "ia": {"questions": {"origine": "humain", "pourquoi": f"Questions reprises telles quelles du workflow n8n « {name} »."}},
+    }

@@ -903,6 +903,30 @@ function importResult(e, src, dlg) {
   put(card, h('details', {}, h('summary', { class: 'small', text: 'Détail des nœuds' }),
     IMPORT_GROUPS.map(([k, icon, label]) => a[k].length ? h('div', { class: 'stack', style: 'margin-top:6px' }, h('b', { class: 'small', text: `${icon} ${label}` }),
       a[k].map(it => h('div', { class: 'small' }, h('b', { text: it.nom }), h('span', { class: 'faint', text: ` (${it.type}) ` }), it.detail || ''))) : null)));
+  const from = src.iid ? { instance: src.iid, id: src.wid } : { texte: src.texte, index: src.index };
+  const qs = a.questions_jev || [];
+  const openFiche = fiche => {
+    J.fiche = fiche; J.fid = null; J.savedId = null; J.bench = null; J.calib = null; J.essai = null; J.scene = null; J.preview = null; J.lab = null; J.leviers = null; J.target = null;
+    Object.keys(J.fiche.ia || {}).forEach(k => { J.openWhy[k] = false; });
+    dlg.close(); location.hash = '#jev'; route();
+  };
+  if (qs.length) {
+    const TL = { noul: 'oui / non', choice: 'choix', score: 'score' };
+    put(card, h('div', { class: 'stack' },
+      h('b', { class: 'small', text: `🧠 ${qs.length} question${qs.length > 1 ? 's' : ''} Jev trouvée${qs.length > 1 ? 's' : ''} dans le workflow :` }),
+      h('div', { class: 'models', style: 'max-height:220px' }, h('table', {}, h('tbody', {}, qs.map(q => h('tr', {},
+        h('td', { class: 'mono small', text: q.id }), h('td', {}, h('span', { class: 'badge', text: TL[q.type] || q.type })),
+        h('td', { class: 'small faint', text: q.noeud || '' }),
+        h('td', { class: 'small', text: (typeof q.instructions === 'string' ? q.instructions : JSON.stringify(q.instructions)).slice(0, 110) + (q.criteria && !Array.isArray(q.criteria) ? ` (${Object.keys(q.criteria).length} mots)` : '') })))))),
+      h('div', { class: 'row' }, h('button', { class: 'primary', text: `Reprendre ces ${qs.length} questions dans le Labo Jev`, onclick: async ev => {
+        ev.target.disabled = true;
+        try {
+          const r = await api('POST', '/api/import/fiche', from);
+          openFiche(r.fiche);
+          toast(`${r.questions} questions reprises telles quelles. Ajoutez des cas de test, puis réglez les seuils dans la salle de réglage.`);
+        } catch (err) { toast(err.message, true); ev.target.disabled = false; }
+      } }), h('span', { class: 'small muted', text: 'Sans IA : questions, mots et consignes à l\'identique. Résultats de départ : traiter, ou revoir quand Jev hésite.' }))));
+  }
   const chat = chatProviders().filter(p => p.configured);
   if (!a.llm.length && !a.decision.length && !a.jev.length) return card;
   if (!chat.length) return put(card, h('p', { class: 'small' }, 'Conversion par l\'IA : ', h('a', { href: '#modeles', onclick: () => dlg.close(), text: 'ajoutez une clé OpenRouter ou branchez Ollama' }), '.'));
@@ -911,15 +935,12 @@ function importResult(e, src, dlg) {
   put(card, h('div', { class: 'row' },
     field('Fournisseur', selectEl(chat.map(p => [p.id, p.label]), st.provider, v => { st.provider = v; st.model = (provider(v) || {}).default_model || ''; }), 'w180'),
     field('Modèle', modelInput(st.provider, st.model, v => { st.model = v; }), 'grow')),
-    h('div', { class: 'row' }, h('button', { class: 'primary', text: '✦ Convertir en fiche Labo Jev', onclick: async ev => {
+    h('div', { class: 'row' }, h('button', { class: qs.length ? '' : 'primary', text: qs.length ? '✦ Compléter avec l\'IA (résultats et règles)' : '✦ Convertir en fiche Labo Jev', onclick: async ev => {
       ev.target.disabled = true; status.textContent = 'L\'IA lit le workflow et remplit la fiche…';
       try {
-        const from = src.iid ? { instance: src.iid, id: src.wid } : { texte: src.texte, index: src.index };
         const r = await api('POST', '/api/import/convertir', { provider: st.provider, model: st.model, ...from });
-        J.fiche = r.fiche; J.fid = null; J.savedId = null; J.bench = null; J.calib = null; J.essai = null; J.scene = null; J.preview = null; J.lab = null; J.leviers = null; J.target = null;
-        Object.keys(J.fiche.ia || {}).forEach(k => { J.openWhy[k] = false; });
-        dlg.close(); location.hash = '#jev'; route();
-        toast('Fiche proposée par l\'IA : chaque case dit pourquoi. Réglez, puis faites passer les wagons d\'essai.');
+        openFiche(r.fiche);
+        toast(qs.length ? 'Questions gardées telles quelles ; résultats et règles proposés par l\'IA, chaque case dit pourquoi.' : 'Fiche proposée par l\'IA : chaque case dit pourquoi. Réglez, puis faites passer les wagons d\'essai.');
       } catch (err) { status.textContent = ''; toast(err.message + (err.errors ? ' : ' + err.errors.join(' ; ') : ''), true); ev.target.disabled = false; }
     } }), status),
     h('p', { class: 'small faint', text: 'Votre workflow d\'origine n\'est pas modifié : l\'automate converti sera envoyé comme un nouveau workflow.' }));
